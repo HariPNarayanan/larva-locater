@@ -1,6 +1,6 @@
 # larva-locater
 
-## This project currently contains two scripts
+#### This project currently contains two scripts
 # PrefIndex
 This script takes a folder containing TRex tracked files as input and outputs the preference index calculated over 900 frames.
 
