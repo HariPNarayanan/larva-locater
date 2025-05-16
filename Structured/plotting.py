@@ -348,63 +348,89 @@ import pandas as pd
 def plot_distance_by_condition_average(
     df,
     frame_column='Frame',
-    distance_column='Distance',
+    metrics=['Distance', 'AvgNeighborDist'],
     condition_column='Condition',
     trial_column='Trial',
     bin_size=100
 ):
     """
-    Plots boxplots of 'Distance' averaged per 'Trial', binned by 'Frame' intervals, comparing different conditions.
-    Displays all bins.
+    Plots boxplots of each metric (e.g., 'Distance', 'AvgNeighborDist') averaged per 'Trial', 
+    binned by 'Frame' intervals, comparing different conditions. Displays all bins for both metrics.
 
     Parameters:
-        df (pd.DataFrame): The DataFrame containing 'Distance', 'Frame', 'Condition', and 'Trial' columns.
+        df (pd.DataFrame): The DataFrame containing metrics, 'Frame', 'Condition', and 'Trial' columns.
         frame_column (str): The column name representing the frame number.
-        distance_column (str): The column name representing the pre-calculated distance.
+        metrics (list): List of 1 or 2 column names (strings) to plot.
         condition_column (str): The column name representing the condition for comparison.
         trial_column (str): The column representing individual trials.
         bin_size (int): The number of frames to group together in each bin for boxplots.
     """
-    # Ensure required columns exist
-    required_columns = {frame_column, distance_column, condition_column, trial_column}
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import pandas as pd
+
+    if not 1 <= len(metrics) <= 2:
+        raise ValueError("You must provide 1 or 2 metric column names.")
+
+    required_columns = {frame_column, condition_column, trial_column, *metrics}
     if not required_columns.issubset(df.columns):
         raise ValueError(f"DataFrame must contain columns: {required_columns}")
-    
-    # Add bin column
+
+    df = df.copy()
     df['Bin'] = (df[frame_column] // bin_size) * bin_size
 
-    # Group and compute mean
-    df_avg = df.groupby(['Bin', condition_column, trial_column])[distance_column].mean().reset_index()
-    
-    # Identify unique conditions
-    conditions = sorted(df_avg[condition_column].unique())
-    
-    # Assign half to red, half to blue (or any rule you prefer)
+    plot_data = []
+    for metric in metrics:
+        df_avg = (
+            df.groupby(['Bin', condition_column, trial_column])[metric]
+            .mean()
+            .reset_index()
+        )
+        df_avg['Metric'] = metric
+        df_avg['Value'] = df_avg[metric]
+        plot_data.append(df_avg)
+
+    df_plot = pd.concat(plot_data, ignore_index=True)
+
+    conditions = sorted(df_plot[condition_column].unique())
     num_conditions = len(conditions)
     mid = num_conditions // 2
 
     red_shades = sns.color_palette("Reds", mid + (num_conditions % 2))
     blue_shades = sns.color_palette("Blues", mid)
 
-    # Combine into one palette dictionary
     condition_palette = {
         condition: red_shades[i] if i < len(red_shades) else blue_shades[i - len(red_shades)]
         for i, condition in enumerate(conditions)
     }
 
-    # Plot
-    plt.figure(figsize=(14, 6))
-    sns.boxplot(data=df_avg, x='Bin', y=distance_column, hue=condition_column, palette=condition_palette)
-    sns.stripplot(data=df_avg, x='Bin', y=distance_column, hue=condition_column,
-                  dodge=True, color="black", alpha=0.6, jitter=True, legend=False)
+    n_metrics = len(metrics)
+    fig, axes = plt.subplots(1, n_metrics, figsize=(7 * n_metrics, 6), sharey=False)
 
-    plt.title('Boxplots of Averaged Distance per Trial (All Bins) by Condition')
-    plt.xlabel('Frame Interval')
-    plt.ylabel('Average Distance per Trial to the Odour Source')
-    plt.xticks(rotation=45)
-    plt.legend(title=condition_column, bbox_to_anchor=(1.05, 1), loc='upper left')
+    if n_metrics == 1:
+        axes = [axes]
+
+    for ax, metric in zip(axes, metrics):
+        metric_df = df_plot[df_plot['Metric'] == metric]
+
+        sns.boxplot(data=metric_df, x='Bin', y='Value', hue=condition_column,
+                    palette=condition_palette, ax=ax)
+        sns.stripplot(data=metric_df, x='Bin', y='Value', hue=condition_column,
+                      dodge=True, color="black", alpha=0.6, jitter=True, legend=False, ax=ax)
+
+        ax.set_title(f'{metric} Averaged per Trial (All Bins)')
+        ax.set_xlabel('Frame Interval')
+        ax.set_ylabel(metric)
+        ax.tick_params(axis='x', rotation=45)
+
+        # Put legend inside top right corner of the plot
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles=handles, labels=labels, title=condition_column,
+                  loc='upper right', frameon=True, fontsize=9)
+
     plt.tight_layout()
     plt.show()
+
 
 def plot_speed_by_condition(df, frame_column='Frame', speed_column='Speed', condition_column='Condition', bin_size=100, num_bins_to_display=4):
     """
@@ -458,85 +484,112 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-def plot_zone_means_subplot(dataframes, concentrations, titles):
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import numpy as np
+
+def plot_zone_means_subplot(df, filter_column='Concentration', filter_values=None, titles=["Early", "Mid", "Late"]):
     """
-    Creates a 3x3 subplot panel of mean zone proportions for different time points and concentrations.
+    Creates a subplot panel of mean zone proportions for different time points and a chosen filter column.
     
     Parameters:
-        dataframes (list): List of DataFrames [early, mid, late].
-        concentrations (list): List of concentrations ['10-3', '10-4', '10-5'].
-        titles (list): Titles for each row (time points: early, mid, late).
+        df (DataFrame): The full dataset.
+        filter_column (str): The column to filter by for subplot columns (default = 'Concentration').
+        filter_values (list or None): List of unique values to use from filter_column. If None, auto-detected.
+        titles (list): Titles for each timepoint row (default = ['Early', 'Mid', 'Late']).
     """
-    fig, axes = plt.subplots(3, 3, figsize=(12, 12), sharey=True, sharex=True)
-    
-    # **Improved Bright Color Palettes** 
-    red_shades = sns.color_palette("Reds", 3)  
-    blue_shades = sns.color_palette("Blues", 3)  
+    if filter_values is None:
+        filter_values = sorted(df[filter_column].dropna().unique())
 
-    # **Clamp values between 0 and 1 to avoid invalid colors**
+    min_frame, max_frame = df['Frame'].min(), df['Frame'].max()
+    frame_third = (max_frame - min_frame) // 3
+
+    early_df = df[df['Frame'] <= min_frame + frame_third]
+    mid_df = df[(df['Frame'] > min_frame + frame_third) & (df['Frame'] <= min_frame + 2 * frame_third)]
+    late_df = df[df['Frame'] > min_frame + 2 * frame_third]
+
+    dataframes = [early_df, mid_df, late_df]
+
+    num_rows = len(dataframes)
+    num_cols = len(filter_values)
+
+    fig, axes = plt.subplots(num_rows, num_cols, figsize=(4 * num_cols, 4 * num_rows), sharey=True, sharex=True)
+
+    if num_rows == 1:
+        axes = np.expand_dims(axes, axis=0)
+    if num_cols == 1:
+        axes = np.expand_dims(axes, axis=1)
+
+    red_shades = sns.color_palette("Reds", 3)
+    blue_shades = sns.color_palette("Blues", 3)
+
     red_shades = [(min(r, 1), min(g, 1), min(b, 1)) for r, g, b in red_shades]
-    blue_shades = [(min(r*0.8, 1), min(g*0.9, 1), min(b*1.1, 1)) for r, g, b in blue_shades]  # Ensure valid colors
+    blue_shades = [(min(r * 0.8, 1), min(g * 0.9, 1), min(b * 1.1, 1)) for r, g, b in blue_shades]
 
-    for row_idx, (df, title) in enumerate(zip(dataframes, titles)):
-        for col_idx, conc in enumerate(concentrations):
-            ax = axes[row_idx, col_idx]
-            
-            df_filtered = df[df['Concentration'] == conc]
+    for row_idx, (df_time, title) in enumerate(zip(dataframes, titles)):
+        for col_idx, value in enumerate(filter_values):
+            ax = axes[row_idx][col_idx]
+
+            df_filtered = df_time[df_time[filter_column] == value]
 
             if df_filtered.empty:
                 ax.set_visible(False)
                 continue
 
             y_min, y_max = df_filtered['Y'].min(), df_filtered['Y'].max()
-            y_range = (y_max - y_min) / 3  
-            y_bounds = [y_min + y_range, y_min + 2 * y_range]  
+            y_range = (y_max - y_min) / 3
+            y_bounds = [y_min + y_range, y_min + 2 * y_range]
 
             zone_means = []
 
             for condition in df_filtered['Condition'].unique():
                 df_condition = df_filtered[df_filtered['Condition'] == condition]
-                starvation_status = df_condition['Starvation'].iloc[0]  
+                starvation_status = df_condition['Starvation'].iloc[0]
 
                 mean_zone_1 = np.mean(df_condition['Y'] < y_bounds[0])
                 mean_zone_2 = np.mean((df_condition['Y'] >= y_bounds[0]) & (df_condition['Y'] < y_bounds[1]))
                 mean_zone_3 = np.mean(df_condition['Y'] >= y_bounds[1])
 
-                zone_means.append({'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 1', 'Mean Proportion': mean_zone_1})
-                zone_means.append({'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 2', 'Mean Proportion': mean_zone_2})
-                zone_means.append({'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 3', 'Mean Proportion': mean_zone_3})
+                zone_means.extend([
+                    {'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 1', 'Mean Proportion': mean_zone_1},
+                    {'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 2', 'Mean Proportion': mean_zone_2},
+                    {'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 3', 'Mean Proportion': mean_zone_3}
+                ])
 
             df_means = pd.DataFrame(zone_means)
 
             color_mapping = {}
-            red_idx, blue_idx = 0, 0  
+            red_idx, blue_idx = 0, 0
 
             for condition in df_means['Condition'].unique():
                 starvation_status = df_means[df_means['Condition'] == condition]['Starvation'].iloc[0]
 
-                if starvation_status == '5h':  
+                if starvation_status == '5h':
                     color_mapping[condition] = red_shades[red_idx]
                     red_idx = (red_idx + 1) % len(red_shades)
-                else:  
+                else:
                     color_mapping[condition] = blue_shades[blue_idx]
                     blue_idx = (blue_idx + 1) % len(blue_shades)
 
             for condition in df_means['Condition'].unique():
                 df_cond = df_means[df_means['Condition'] == condition]
 
-                ax.plot(df_cond['Zone'], df_cond['Mean Proportion'], marker='o', markersize=6, 
+                ax.plot(df_cond['Zone'], df_cond['Mean Proportion'], marker='o', markersize=6,
                         linestyle='-', linewidth=4, color=color_mapping[condition], label=condition)
 
             ax.set_ylim(0, 1)
             if row_idx == 0:
-                ax.set_title(f"Concentration: {conc}")
+                ax.set_title(f"{filter_column}: {value}")
                 ax.legend(title="Condition", loc='upper right', fontsize=10, frameon=True)
             if col_idx == 0:
                 ax.set_ylabel(f"{title}\nMean Proportion")
-            if row_idx == 2:
+            if row_idx == num_rows - 1:
                 ax.set_xlabel("Zone")
 
     plt.tight_layout()
     plt.show()
+
 
 # Example Usage:
 # dataframes = [primary_df_interp_early, primary_df_interp_mid, primary_df_interp_late]
@@ -624,5 +677,438 @@ def plot_two_distance_by_condition_averages(
         frameon=True
     )
     
+    plt.tight_layout()
+    plt.show()
+
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+import matplotlib.pyplot as plt
+import seaborn as sbs
+
+def prepare_aggregated_over_time(df, y_var):
+    """
+    Aggregates AvgNeighborDist or Distance over time separately for Real (by Trial)
+    and Simulated (by SimGroupID), preserving variation across replicates.
+    """
+    real = df[df['GroupType'] == 'Real'].copy()
+    sim = df[df['GroupType'] == 'Simulated'].copy()
+
+    # Add GroupID for consistent naming
+    real['GroupID'] = real['Trial']
+    sim['GroupID'] = sim['SimGroupID']
+
+    combined = pd.concat([real, sim], ignore_index=True)
+
+    # Now group by replicate (Trial or SimGroupID), Frame, and Condition
+    grouped = (
+        combined.groupby(['Condition', 'GroupType', 'GroupID', 'Frame'])[y_var]
+        .mean()
+        .reset_index()
+    )
+
+    return grouped
+
+def plot_distances_over_time(df, y_vars=('AvgNeighborDist', 'Distance'), per_condition=False):
+    """
+    Plots neighbor and center distances over time for Real vs Simulated groups.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Must contain: ['Frame', 'Condition', 'GroupType', 'AvgNeighborDist', 'Distance']
+    y_vars : tuple of str
+        Y-axis variables to plot (defaults to neighbor & center distance)
+    per_condition : bool
+        If True, creates a subplot per condition; else uses 1x2 subplot layout
+    """
+    import seaborn as sns
+
+    if per_condition:
+        for y_var in y_vars:
+            if y_var not in df.columns:
+                print(f"Missing column: {y_var}")
+                continue
+
+            g = sns.relplot(
+                data=df,
+                x='Frame',
+                y=y_var,
+                hue='GroupType',
+                col='Condition',
+                kind='line',
+                facet_kws={'sharey': False, 'sharex': True},
+                height=4,
+                aspect=1.3,
+            )
+            g.fig.subplots_adjust(top=0.85)
+            g.fig.suptitle(f"{y_var} Over Time by Condition")
+            plt.show()
+
+    else:
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharex=True)
+
+        for ax, y_var in zip(axes, y_vars):
+            if y_var not in df.columns:
+                print(f"Column '{y_var}' not found in DataFrame.")
+                continue
+
+            # Aggregate by Frame, Condition, GroupType
+            agg_df = prepare_aggregated_over_time(df, y_var)
+
+            sbs.lineplot(
+                data=agg_df,
+                x='Frame',
+                y=y_var,
+                hue='GroupType',
+                style='Condition',
+                errorbar='sd',  # now standard deviation across replicates per frame
+                ax=ax
+            )
+
+        plt.tight_layout()
+        plt.show()
+
+import matplotlib.pyplot as plt
+import seaborn as sbs
+import numpy as np
+import pandas as pd
+
+def plot_binned_summary(df, bin_size=100):
+    """
+    Plots AvgNeighborDist and Distance as boxplots across binned frames,
+    comparing one real and one simulated condition.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Combined dataframe containing both Real and Simulated data for two conditions.
+        Must include columns: ['Frame', 'Distance', 'AvgNeighborDist', 'GroupType', 'Trial', 'SimGroupID', 'Condition']
+    
+    bin_size : int
+        Frame bin size for aggregating data, default = 100.
+    """
+    df = df.copy()
+
+    # Validate expected structure
+    group_types = df['GroupType'].unique()
+    if set(group_types) != {'Real', 'Simulated'}:
+        raise ValueError(f"Expected GroupType to contain 'Real' and 'Simulated', got {group_types}")
+
+    conditions = df['Condition'].unique()
+    if len(conditions) != 2:
+        raise ValueError(f"Expected 2 conditions, found {len(conditions)}: {conditions}")
+
+    # Identify real/sim condition labels
+    real_condition = df[df['GroupType'] == 'Real']['Condition'].unique()[0]
+    sim_condition = df[df['GroupType'] == 'Simulated']['Condition'].unique()[0]
+
+    # Consistent group ID and frame bins
+    df['GroupID'] = np.where(df['GroupType'] == 'Real', df['Trial'], df['SimGroupID'])
+    df['FrameBin'] = (df['Frame'] // bin_size) * bin_size
+
+    # Metrics to plot
+    metrics = ['AvgNeighborDist', 'Distance']
+    fig, axes = plt.subplots(1, 2, figsize=(18, 6), sharey=False)
+
+    for ax, metric in zip(axes, metrics):
+        # Mean per (GroupType, GroupID, FrameBin)
+        summary_df = (
+            df.groupby(['GroupType', 'Condition', 'GroupID', 'FrameBin'])[metric]
+            .mean()
+            .reset_index()
+        )
+
+        sbs.boxplot(
+            data=summary_df,
+            x='FrameBin',
+            y=metric,
+            hue='GroupType',
+            palette='pastel',
+            ax=ax,
+            showfliers=False
+        )
+
+        sbs.stripplot(
+            data=summary_df,
+            x='FrameBin',
+            y=metric,
+            hue='GroupType',
+            dodge=True,
+            color='black',
+            size=3,
+            alpha=0.5,
+            ax=ax,
+            legend=False
+        )
+
+        ax.set_title(f"{metric} per {bin_size}-Frame Bin\nReal: {real_condition} | Sim: {sim_condition}")
+        ax.set_xlabel("Frame Bin")
+        ax.set_ylabel(metric)
+        ax.tick_params(axis='x', rotation=45)
+
+    # Shared legend
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, title='GroupType', bbox_to_anchor=(1.02, 0.95), loc='upper left')
+
+    plt.tight_layout()
+    plt.show()
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sbs
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sbs
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sbs
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sbs
+
+def boxplot_speed_by_genotype(df, frame_col='Frame', speed_col='Speed', genotype_col='Genotype', bin_size=100):
+    """
+    Plots a boxplot of Speed per Genotype in 100-frame bins, with Speed clamped between 0.5 and 2.0.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Dataframe with columns including 'Frame', 'Speed', and 'Genotype'.
+    frame_col : str
+        Column representing frame/time.
+    speed_col : str
+        Column representing speed.
+    genotype_col : str
+        Column representing genotype or grouping.
+    bin_size : int
+        Frame bin size (default 100).
+    """
+    df = df.copy()
+
+    # Forward-fill Speed to handle NaNs
+    df[speed_col] = df[speed_col].fillna(method='ffill')
+
+    # Clamp Speed values between 0.5 and 2.0
+    df[speed_col] = df[speed_col].clip(lower=0.5, upper=2.0)
+
+    # Drop rows with any remaining NaNs
+    df.dropna(subset=[speed_col, frame_col, genotype_col], inplace=True)
+
+    # Create frame bins
+    df['FrameBin'] = (df[frame_col] // bin_size) * bin_size
+
+    # Plot boxplot
+    plt.figure(figsize=(14, 6))
+    sbs.boxplot(
+        data=df,
+        x='FrameBin',
+        y=speed_col,
+        hue=genotype_col,
+        palette='Set2',
+        showfliers=False
+    )
+    plt.xlabel('Frame (binned)')
+    plt.ylabel('Speed (clamped to 0.5–2.0)')
+    plt.title('Speed Distribution per Genotype Over Time')
+    plt.legend(title='Genotype', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+import matplotlib.pyplot as plt
+import seaborn as sbs
+import pandas as pd
+
+import matplotlib.pyplot as plt
+import seaborn as sbs
+import pandas as pd
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+
+def plot_speed_kde_by_genotype(df, speed_col='Speed', genotype_col='Genotype', clamp_range=(0.5, 2.0)):
+    """
+    Plots KDEs of Speed values by Genotype, excluding values outside clamp_range.
+    Adds vertical lines at the mean speed per genotype.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with speed and genotype columns.
+    speed_col : str
+        Column name for speed values.
+    genotype_col : str
+        Column name for genotype categories.
+    clamp_range : tuple
+        (min_speed, max_speed) to exclude outliers.
+    """
+    df = df.copy()
+    df = df[[speed_col, genotype_col]].dropna()
+
+    # Filter values within clamp range
+    df = df[(df[speed_col] >= clamp_range[0]) & (df[speed_col] <= clamp_range[1])]
+
+    plt.figure(figsize=(10, 6))
+    palette = sns.color_palette("muted", df[genotype_col].nunique())
+
+    for i, (genotype, group) in enumerate(df.groupby(genotype_col)):
+        color = palette[i]
+        # Plot KDE
+        sns.kdeplot(
+            data=group,
+            x=speed_col,
+            fill=False,
+            color=color,
+            linewidth=2,
+            label=genotype
+        )
+        # Mean line
+        mean_speed = group[speed_col].mean()
+        plt.axvline(mean_speed, color=color, linestyle='--', alpha=0.7)
+
+    plt.title('Speed Distribution by Genotype (KDE + Mean Lines)')
+    plt.xlabel('Speed')
+    plt.ylabel('Density')
+    plt.legend(title='Genotype')
+    plt.grid(True, linestyle='--', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def plot_preference_index_over_time(dataframe):
+    """
+    Plots the mean Preference Index over time for each condition.
+    Preference Index = (Zone 1 - Zone 3) / (Zone 1 + Zone 2 + Zone 3)
+
+    Parameters:
+        dataframe (pd.DataFrame): Input DataFrame with columns ['Y', 'Frame', 'Trial', 'Condition']
+    """
+    # Define Y boundaries for 3 horizontal zones
+    y_min, y_max = dataframe['Y'].min(), dataframe['Y'].max()
+    y_range = (y_max - y_min) / 3
+    zone_bounds = [y_min, y_min + y_range, y_min + 2 * y_range, y_max]  # [Z1_low, Z2_low, Z3_low, y_max]
+
+    frame_data = []
+
+    for condition in dataframe['Condition'].unique():
+        df_condition = dataframe[dataframe['Condition'] == condition]
+
+        for trial in df_condition['Trial'].unique():
+            df_trial = df_condition[df_condition['Trial'] == trial]
+
+            for frame in df_trial['Frame'].unique():
+                df_frame = df_trial[df_trial['Frame'] == frame]
+                if df_frame.empty:
+                    continue
+
+                # Count points in each zone
+                z1 = np.sum(df_frame['Y'] < zone_bounds[1])
+                z2 = np.sum((df_frame['Y'] >= zone_bounds[1]) & (df_frame['Y'] < zone_bounds[2]))
+                z3 = np.sum(df_frame['Y'] >= zone_bounds[2])
+                total = z1 + z2 + z3
+
+                if total == 0:
+                    continue
+
+                # Compute preference index
+                pi = (z1 - z3) / total
+
+                frame_data.append({
+                    'Condition': condition,
+                    'Trial': trial,
+                    'Frame': frame,
+                    'PreferenceIndex': pi
+                })
+
+    df_frames = pd.DataFrame(frame_data)
+
+    # Plot: mean PI over time with confidence intervals per condition
+    plt.figure(figsize=(12, 6))
+    sns.lineplot(
+        data=df_frames,
+        x='Frame',
+        y='PreferenceIndex',
+        hue='Condition',
+        estimator='mean',
+        ci='sd',
+        palette='muted',
+        lw=2
+    )
+
+    plt.axhline(0, color='gray', linestyle='--', lw=1)
+    plt.ylabel("Preference Index (Z1 - Z3)")
+    plt.xlabel("Frame")
+    plt.title("Mean Preference Index Over Time")
+    plt.legend(title="Condition")
+    plt.tight_layout()
+    plt.show()
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def plot_speed_kde_by_starvation(df, speed_col='Speed', starvation_col='Starvation', clamp_range=(0.5, 2.0)):
+    """
+    Plots KDEs of Speed values by Starvation state, excluding values outside clamp_range.
+    Adds vertical lines at the mean speed per starvation group.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with speed and starvation columns.
+    speed_col : str
+        Column name for speed values.
+    starvation_col : str
+        Column name for starvation categories.
+    clamp_range : tuple
+        (min_speed, max_speed) to exclude outliers.
+    """
+    df = df.copy()
+    df = df[[speed_col, starvation_col]].dropna()
+
+    # Filter values within clamp range
+    df = df[(df[speed_col] >= clamp_range[0]) & (df[speed_col] <= clamp_range[1])]
+
+    plt.figure(figsize=(10, 6))
+    palette = sns.color_palette("muted", df[starvation_col].nunique())
+
+    for i, (group_name, group_df) in enumerate(df.groupby(starvation_col)):
+        color = palette[i]
+        # Plot KDE
+        sns.kdeplot(
+            data=group_df,
+            x=speed_col,
+            fill=False,
+            color=color,
+            linewidth=2,
+            label=group_name
+        )
+        # Mean line
+        mean_speed = group_df[speed_col].mean()
+        plt.axvline(mean_speed, color=color, linestyle='--', alpha=0.7)
+
+    plt.title('Speed Distribution by Starvation (KDE + Mean Lines)')
+    plt.xlabel('Speed')
+    plt.ylabel('Density')
+    plt.legend(title='Starvation')
+    plt.grid(True, linestyle='--', alpha=0.3)
     plt.tight_layout()
     plt.show()

@@ -224,120 +224,109 @@ def interpolate_missing_values(df):
 import numpy as np
 from scipy.spatial import distance_matrix
 
-def add_neighbor_distances(df):
-    """
-    Adds average and nearest neighbor distances to the dataframe, per row, based on 
-    Condition, Trial, and Frame groupings.
-
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        Dataframe containing at least the columns: ['X', 'Y', 'Frame', 'Trial', 'Condition']
-
-    Returns:
-    --------
-    pandas.DataFrame
-        Original dataframe with added columns: 'AvgNeighborDist' and 'NearestNeighborDist'
-    """
-    # Initialize columns with NaNs
-    df['AvgNeighborDist'] = np.nan
-    df['NearestNeighborDist'] = np.nan
-
-    # Group by condition, trial, and frame
-    grouped = df.groupby(['Condition', 'Trial', 'Frame'])
-
-    for (condition, trial, frame), group in grouped:
-        coords = group[['X', 'Y']].to_numpy()
-        indices = group.index
-
-        if len(coords) < 2:
-            continue  # Not enough points to compute distances
-
-        dists = distance_matrix(coords, coords)
-        np.fill_diagonal(dists, np.nan)  # Exclude self-distance
-
-        # Compute per-individual distances
-        avg_dists = np.nanmean(dists, axis=1)
-        nearest_dists = np.nanmin(dists, axis=1)
-
-        # Assign back to the dataframe using index
-        df.loc[indices, 'AvgNeighborDist'] = avg_dists
-        df.loc[indices, 'NearestNeighborDist'] = nearest_dists
-
-    return df
-
 import numpy as np
 import pandas as pd
-from scipy.spatial import distance_matrix, cKDTree
+from scipy.spatial import cKDTree, distance_matrix
 
-import numpy as np
-import pandas as pd
-from scipy.spatial import distance_matrix, cKDTree
-
-def bootstrap_single_collective_conditions(df):
+def create_combined_real_simulated_df(df, group_size=15, n_bootstrap=8, seed=None):
     """
-    Computes simulated neighbor distances only for rows where Collective == 'Single'.
-    This avoids modifying real group data.
+    Combines real group data and simulated 'Single' groups into a unified dataframe,
+    and computes AvgNeighborDist and NearestNeighborDist for all groupings.
 
     Parameters:
     -----------
     df : pd.DataFrame
+        Input dataframe containing at least columns: ['X', 'Y', 'Frame', 'Trial', 'Condition', 'Collective']
+    group_size : int
+        Number of individuals per simulated group (default 15)
+    n_bootstrap : int
+        Number of simulated groups per condition/frame (default 8)
+    seed : int or None
+        Random seed for reproducibility
 
     Returns:
     --------
     pd.DataFrame
-        Original df, updated with AvgNeighborDist and NearestNeighborDist for 'Single' rows only.
+        Combined dataframe with neighbor distances and simulation labels.
     """
+    if seed is not None:
+        np.random.seed(seed)
+
     df = df.copy()
+    df['Simulated'] = False
+    df['GroupType'] = np.nan
+    df['AvgNeighborDist'] = np.nan
+    df['NearestNeighborDist'] = np.nan
 
-    # Initialize new columns if not already present
-    if 'AvgNeighborDist' not in df.columns:
-        df['AvgNeighborDist'] = np.nan
-    if 'NearestNeighborDist' not in df.columns:
-        df['NearestNeighborDist'] = np.nan
-    if 'Simulated' not in df.columns:
-        df['Simulated'] = False
+    # 1. Real group data — compute distances
+    df_real = df[df['Collective'] == 'Group'].copy()
+    df_real['GroupType'] = 'Real'
 
-    # Only process 'Single' collective conditions
+    real_grouped = df_real.groupby(['Condition', 'Trial', 'Frame'])
+
+    real_rows = []
+
+    for (condition, trial, frame), group in real_grouped:
+        coords = group[['X', 'Y']].to_numpy()
+        if len(coords) < 2:
+            continue
+
+        dists = distance_matrix(coords, coords)
+        np.fill_diagonal(dists, np.nan)
+        avg_dists = np.nanmean(dists, axis=1)
+        nearest_dists = np.nanmin(dists, axis=1)
+
+        group = group.copy()
+        group['AvgNeighborDist'] = avg_dists
+        group['NearestNeighborDist'] = nearest_dists
+        group['GroupType'] = 'Real'
+        group['Simulated'] = False
+
+        real_rows.append(group)
+
+    df_real = pd.concat(real_rows, ignore_index=True)
+
+    # 2. Simulated 'Single' groups
     single_df = df[df['Collective'] == 'Single']
-    grouped_conditions = single_df['Condition'].unique()
+    simulated_rows = []
 
-    updated_single_rows = []
-
-    for condition in grouped_conditions:
+    for condition in single_df['Condition'].unique():
         cond_df = single_df[single_df['Condition'] == condition]
 
-        for frame in cond_df['Frame'].unique():
-            frame_df = cond_df[cond_df['Frame'] == frame]
-            coords = frame_df[['X', 'Y']].to_numpy()
+        # Combine all frames under this condition
+        # Drop rows with missing coords just in case
+        cond_df = cond_df.dropna(subset=['X', 'Y'])
 
-            if len(coords) < 2:
-                continue  # Not enough data to compute distances
+        # Can't create enough groups if we don't have enough individuals
+        max_possible_groups = len(cond_df) // group_size
+        n_groups = min(n_bootstrap, max_possible_groups)
 
-            # Distance calculations
+        for sim in range(n_groups):
+            sampled = cond_df.sample(n=group_size, replace=False)
+            coords = sampled[['X', 'Y']].to_numpy()
+
             dists = distance_matrix(coords, coords)
             np.fill_diagonal(dists, np.nan)
             avg_dists = np.nanmean(dists, axis=1)
+            nearest_dists = np.nanmin(dists, axis=1)
 
-            tree = cKDTree(coords)
-            dists_nn, _ = tree.query(coords, k=2)
-            nearest_dists = dists_nn[:, 1]
+            sampled = sampled.copy()
+            sampled['AvgNeighborDist'] = avg_dists
+            sampled['NearestNeighborDist'] = nearest_dists
+            sampled['Simulated'] = True
+            sampled['GroupType'] = 'Simulated'
+            sampled['SimGroupID'] = f'{condition}_s{sim}'
 
-            frame_df = frame_df.copy()
-            frame_df['AvgNeighborDist'] = avg_dists
-            frame_df['NearestNeighborDist'] = nearest_dists
-            frame_df['Simulated'] = True
+            simulated_rows.append(sampled)
 
-            updated_single_rows.append(frame_df)
+    df_simulated = pd.concat(simulated_rows, ignore_index=True) if simulated_rows else pd.DataFrame()
 
-    # Replace only the original 'Single' collective rows
-    if updated_single_rows:
-        updated_df = pd.concat(updated_single_rows, ignore_index=True)
-        df_non_single = df[df['Collective'] != 'Single']
-        df_single_updated = pd.concat([
-        df[(df['Collective'] == 'Single') & (~df.index.isin(updated_df.index))],
-        updated_df], ignore_index=True)
-        df = pd.concat([df_non_single, df_single_updated], ignore_index=True)
+    # 3. Combine
+    combined_df = pd.concat([df_real, df_simulated], ignore_index=True)
 
-    return df
+    return combined_df
+
+import matplotlib.pyplot as plt
+import seaborn as sbs
+
 
