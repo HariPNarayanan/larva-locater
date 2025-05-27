@@ -118,22 +118,20 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-def plot_zone_1_over_time(dataframe):
+def plot_zone_1_over_time(dataframe, y_range=None):
     """
     Plots the mean proportion of points in Zone 1 over time for each condition.
-    
+
     Parameters:
         dataframe (pd.DataFrame): The input dataframe containing trajectory data.
+        y_range (tuple or None): Tuple (ymin, ymax) to set fixed y-axis range. If None, auto-scale is used.
     """
     # Get min/max y-values to define the zones
     y_min, y_max = dataframe['Y'].min(), dataframe['Y'].max()
-    y_range = (y_max - y_min) / 3  # Divide into 3 equal zones
-    y_bound = y_min + y_range  # Upper boundary of Zone 1
+    y_bound = y_min + (y_max - y_min) / 3  # Zone 1 upper boundary
 
-    # Initialize storage for frame-wise zone proportions
     frame_data = []
 
-    # Process each condition, trial, and frame
     for condition in dataframe['Condition'].unique():
         df_condition = dataframe[dataframe['Condition'] == condition]
 
@@ -142,37 +140,39 @@ def plot_zone_1_over_time(dataframe):
 
             for frame in df_trial['Frame'].unique():
                 df_frame = df_trial[df_trial['Frame'] == frame]
-                total_points = len(df_frame)  # Total points in this frame
-                
-                if total_points == 0:
-                    continue  # Avoid division by zero
+                total_points = len(df_frame)
 
-                # Count points in Zone 1 (bottom zone)
+                if total_points == 0:
+                    continue
+
                 count_zone_1 = np.sum(df_frame['Y'] < y_bound)
 
-                # Store proportion
                 frame_data.append({
-                    'Condition': condition, 
-                    'Frame': frame, 
+                    'Condition': condition,
+                    'Frame': frame,
                     'Proportion': count_zone_1 / total_points
                 })
 
-    # Convert to DataFrame
     df_frames = pd.DataFrame(frame_data)
-    print(df_frames.head())
-    print(df_frames.columns)
 
-    # Plot mean proportion over time for each condition (without CI)
+    # Plot
     plt.figure(figsize=(12, 6))
-    sns.lineplot(x='Frame', y='Proportion', hue='Condition', data=df_frames, 
-                 estimator='mean', palette='pastel', lw=2)  # `lw=2` for thicker lines
+    sns.lineplot(
+        x='Frame', y='Proportion', hue='Condition', data=df_frames,
+        estimator='mean', palette='pastel', lw=2
+    )
 
-    # Labels and title
     plt.ylabel("Mean Proportion in Zone 1")
     plt.xlabel("Frame")
     plt.title("Mean Proportion of Points in Zone 1 Over Time")
     plt.legend(title="Condition")
+
+    # Optional y-axis range
+    if y_range is not None:
+        plt.ylim(y_range)
+
     plt.show()
+
 
 import numpy as np
 import pandas as pd
@@ -562,15 +562,17 @@ def plot_zone_means_subplot(df, filter_column='Concentration', filter_values=Non
             color_mapping = {}
             red_idx, blue_idx = 0, 0
 
+            # Updated color assignment: flip red and blue use
             for condition in df_means['Condition'].unique():
                 starvation_status = df_means[df_means['Condition'] == condition]['Starvation'].iloc[0]
 
+                # Flip here: '5h' now gets blue, others get red
                 if starvation_status == '5h':
-                    color_mapping[condition] = red_shades[red_idx]
-                    red_idx = (red_idx + 1) % len(red_shades)
-                else:
                     color_mapping[condition] = blue_shades[blue_idx]
                     blue_idx = (blue_idx + 1) % len(blue_shades)
+                else:
+                    color_mapping[condition] = red_shades[red_idx]
+                    red_idx = (red_idx + 1) % len(red_shades)
 
             for condition in df_means['Condition'].unique():
                 df_cond = df_means[df_means['Condition'] == condition]
@@ -1112,3 +1114,240 @@ def plot_speed_kde_by_starvation(df, speed_col='Speed', starvation_col='Starvati
     plt.grid(True, linestyle='--', alpha=0.3)
     plt.tight_layout()
     plt.show()
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_preference_index_boxplots(dataframe, bin_size=100):
+    """
+    Plots boxplots of the Preference Index binned by frame ranges for each condition.
+
+    Preference Index = (Zone 1 - Zone 3) / (Zone 1 + Zone 2 + Zone 3)
+
+    Parameters:
+        dataframe (pd.DataFrame): Input DataFrame with columns ['Y', 'Frame', 'Trial', 'Condition']
+        bin_size (int): Number of frames per bin (default 100)
+    """
+    # Define Y boundaries for 3 horizontal zones
+    y_min, y_max = dataframe['Y'].min(), dataframe['Y'].max()
+    y_range = (y_max - y_min) / 3
+    zone_bounds = [y_min, y_min + y_range, y_min + 2 * y_range, y_max]
+
+    frame_data = []
+
+    for condition in dataframe['Condition'].unique():
+        df_condition = dataframe[dataframe['Condition'] == condition]
+
+        for trial in df_condition['Trial'].unique():
+            df_trial = df_condition[df_condition['Trial'] == trial]
+
+            for frame in df_trial['Frame'].unique():
+                df_frame = df_trial[df_trial['Frame'] == frame]
+                if df_frame.empty:
+                    continue
+
+                z1 = np.sum(df_frame['Y'] < zone_bounds[1])
+                z2 = np.sum((df_frame['Y'] >= zone_bounds[1]) & (df_frame['Y'] < zone_bounds[2]))
+                z3 = np.sum(df_frame['Y'] >= zone_bounds[2])
+                total = z1 + z2 + z3
+
+                if total == 0:
+                    continue
+
+                pi = (z1 - z3) / total
+
+                frame_int = int(frame)
+                bin_start = (frame_int // bin_size) * bin_size
+                bin_end = bin_start + bin_size - 1
+                bin_label = f"{bin_start}-{bin_end}"
+
+
+                frame_data.append({
+                    'Condition': condition,
+                    'Trial': trial,
+                    'FrameBin': bin_label,
+                    'PreferenceIndex': pi
+                })
+
+    df_bins = pd.DataFrame(frame_data)
+
+    # Ensure frame bins are ordered correctly
+    df_bins['FrameBin'] = pd.Categorical(df_bins['FrameBin'], ordered=True,
+                                         categories=sorted(df_bins['FrameBin'].unique(),
+                                                           key=lambda x: int(x.split('-')[0])))
+
+    plt.figure(figsize=(14, 6))
+    sns.boxplot(
+        data=df_bins,
+        x='FrameBin',
+        y='PreferenceIndex',
+        hue='Condition',
+        palette='muted'
+    )
+
+    plt.axhline(0, color='gray', linestyle='--', lw=1)
+    plt.ylabel("Preference Index (Z1 - Z3)")
+    plt.xlabel("Frame Bins")
+    plt.title("Preference Index Distribution in Binned Frames")
+    plt.legend(title="Condition", bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+def plot_zone_means_subplot_default(df, filter_column='Concentration', filter_values=None, titles=["Early", "Mid", "Late"]):
+    """
+    Creates a subplot panel of mean zone proportions for different time points and a chosen filter column.
+
+    Parameters:
+        df (DataFrame): The full dataset.
+        filter_column (str): The column to filter by for subplot columns (default = 'Concentration').
+        filter_values (list or None): List of unique values to use from filter_column. If None, auto-detected.
+        titles (list): Titles for each timepoint row (default = ['Early', 'Mid', 'Late']).
+    """
+    if filter_values is None:
+        filter_values = sorted(df[filter_column].dropna().unique())
+
+    min_frame, max_frame = df['Frame'].min(), df['Frame'].max()
+    frame_third = (max_frame - min_frame) // 3
+
+    early_df = df[df['Frame'] <= min_frame + frame_third]
+    mid_df = df[(df['Frame'] > min_frame + frame_third) & (df['Frame'] <= min_frame + 2 * frame_third)]
+    late_df = df[df['Frame'] > min_frame + 2 * frame_third]
+
+    dataframes = [early_df, mid_df, late_df]
+
+    num_rows = len(dataframes)
+    num_cols = len(filter_values)
+
+    fig, axes = plt.subplots(num_rows, num_cols, figsize=(4 * num_cols, 4 * num_rows), sharey=True, sharex=True)
+
+    if num_rows == 1:
+        axes = np.expand_dims(axes, axis=0)
+    if num_cols == 1:
+        axes = np.expand_dims(axes, axis=1)
+
+    for row_idx, (df_time, title) in enumerate(zip(dataframes, titles)):
+        for col_idx, value in enumerate(filter_values):
+            ax = axes[row_idx][col_idx]
+
+            df_filtered = df_time[df_time[filter_column] == value]
+
+            if df_filtered.empty:
+                ax.set_visible(False)
+                continue
+
+            y_min, y_max = df_filtered['Y'].min(), df_filtered['Y'].max()
+            y_range = (y_max - y_min) / 3
+            y_bounds = [y_min + y_range, y_min + 2 * y_range]
+
+            zone_means = []
+
+            for condition in df_filtered['Condition'].unique():
+                df_condition = df_filtered[df_filtered['Condition'] == condition]
+                starvation_status = df_condition['Starvation'].iloc[0]
+
+                mean_zone_1 = np.mean(df_condition['Y'] < y_bounds[0])
+                mean_zone_2 = np.mean((df_condition['Y'] >= y_bounds[0]) & (df_condition['Y'] < y_bounds[1]))
+                mean_zone_3 = np.mean(df_condition['Y'] >= y_bounds[1])
+
+                zone_means.extend([
+                    {'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 1', 'Mean Proportion': mean_zone_1},
+                    {'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 2', 'Mean Proportion': mean_zone_2},
+                    {'Condition': condition, 'Starvation': starvation_status, 'Zone': 'Zone 3', 'Mean Proportion': mean_zone_3}
+                ])
+
+            df_means = pd.DataFrame(zone_means)
+
+            for condition in df_means['Condition'].unique():
+                df_cond = df_means[df_means['Condition'] == condition]
+
+                ax.plot(df_cond['Zone'], df_cond['Mean Proportion'], marker='o', markersize=6,
+                        linestyle='-', linewidth=4, label=condition)  # No color argument here
+
+            ax.set_ylim(0, 1)
+            if row_idx == 0:
+                ax.set_title(f"{filter_column}: {value}")
+                ax.legend(title="Condition", loc='upper right', fontsize=10, frameon=True)
+            if col_idx == 0:
+                ax.set_ylabel(f"{title}\nMean Proportion")
+            if row_idx == num_rows - 1:
+                ax.set_xlabel("Zone")
+
+    plt.tight_layout()
+    plt.show()
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.spatial.distance import directed_hausdorff
+
+def compute_and_plot_dhd(df, condition_col='Condition', trial_col='Trial', x_col='X', y_col='Y'):
+    """
+    Compute Directed Hausdorff Distance (DHD) between trials from two unique conditions in a DataFrame.
+    Plots DHDs for A→B and B→A directions.
+
+    Args:
+        df (pd.DataFrame): Must contain condition_col, trial_col, x_col, y_col.
+        condition_col (str): Column name for condition labels (2 unique values).
+        trial_col (str): Column name for trial IDs.
+        x_col (str): Column name for X coordinate.
+        y_col (str): Column name for Y coordinate.
+    """
+
+    # Validate input
+    conditions = df[condition_col].unique()
+    assert len(conditions) == 2, "DataFrame must contain exactly 2 unique conditions."
+    cond_a, cond_b = conditions
+
+    # Get trials
+    trials_a = df[df[condition_col] == cond_a][trial_col].unique()
+    trials_b = df[df[condition_col] == cond_b][trial_col].unique()
+
+    results = []
+
+    # A → B
+    for trial_a in trials_a:
+        coords_a = df[(df[trial_col] == trial_a) & (df[condition_col] == cond_a)][[x_col, y_col]].values
+        for trial_b in trials_b:
+            coords_b = df[(df[trial_col] == trial_b) & (df[condition_col] == cond_b)][[x_col, y_col]].values
+            dh_ab = directed_hausdorff(coords_a, coords_b)[0]
+            results.append({
+                'From': cond_a,
+                'To': cond_b,
+                'Trial_From': trial_a,
+                'Trial_To': trial_b,
+                'Directed_Hausdorff': dh_ab
+            })
+
+    # B → A
+    for trial_b in trials_b:
+        coords_b = df[(df[trial_col] == trial_b) & (df[condition_col] == cond_b)][[x_col, y_col]].values
+        for trial_a in trials_a:
+            coords_a = df[(df[trial_col] == trial_a) & (df[condition_col] == cond_a)][[x_col, y_col]].values
+            dh_ba = directed_hausdorff(coords_b, coords_a)[0]
+            results.append({
+                'From': cond_b,
+                'To': cond_a,
+                'Trial_From': trial_b,
+                'Trial_To': trial_a,
+                'Directed_Hausdorff': dh_ba
+            })
+
+    # Create result DataFrame
+    dist_df = pd.DataFrame(results)
+    dist_df['Direction'] = dist_df['From'] + ' → ' + dist_df['To']
+
+    # Plot
+    plt.figure(figsize=(10, 6))
+    sns.boxplot(data=dist_df, x='Direction', y='Directed_Hausdorff', palette='Set2')
+    sns.stripplot(data=dist_df, x='Direction', y='Directed_Hausdorff', color='black', alpha=0.5, jitter=True)
+    plt.title('Directed Hausdorff Distances Between Trials')
+    plt.ylabel('Directed Hausdorff Distance')
+    plt.xlabel('Direction')
+    plt.tight_layout()
+    plt.show()
+
+    return dist_df
