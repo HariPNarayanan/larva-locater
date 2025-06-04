@@ -1112,3 +1112,183 @@ def plot_speed_kde_by_starvation(df, speed_col='Speed', starvation_col='Starvati
     plt.grid(True, linestyle='--', alpha=0.3)
     plt.tight_layout()
     plt.show()
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.spatial.distance import directed_hausdorff
+
+def compute_and_plot_dhd(df, condition_col='Condition', trial_col='Trial', x_col='X', y_col='Y'):
+    """
+    Compute Directed Hausdorff Distance (DHD) between trials from two unique conditions in a DataFrame.
+    Plots DHDs for A→B and B→A directions.
+
+    Args:
+        df (pd.DataFrame): Must contain condition_col, trial_col, x_col, y_col.
+        condition_col (str): Column name for condition labels (2 unique values).
+        trial_col (str): Column name for trial IDs.
+        x_col (str): Column name for X coordinate.
+        y_col (str): Column name for Y coordinate.
+    """
+
+    # Validate input
+    conditions = df[condition_col].unique()
+    assert len(conditions) == 2, "DataFrame must contain exactly 2 unique conditions."
+    cond_a, cond_b = conditions
+
+    # Get trials
+    trials_a = df[df[condition_col] == cond_a][trial_col].unique()
+    trials_b = df[df[condition_col] == cond_b][trial_col].unique()
+
+    results = []
+
+    # A → B
+    for trial_a in trials_a:
+        coords_a = df[(df[trial_col] == trial_a) & (df[condition_col] == cond_a)][[x_col, y_col]].values
+        for trial_b in trials_b:
+            coords_b = df[(df[trial_col] == trial_b) & (df[condition_col] == cond_b)][[x_col, y_col]].values
+            dh_ab = directed_hausdorff(coords_a, coords_b)[0]
+            results.append({
+                'From': cond_a,
+                'To': cond_b,
+                'Trial_From': trial_a,
+                'Trial_To': trial_b,
+                'Directed_Hausdorff': dh_ab
+            })
+
+    # B → A
+    for trial_b in trials_b:
+        coords_b = df[(df[trial_col] == trial_b) & (df[condition_col] == cond_b)][[x_col, y_col]].values
+        for trial_a in trials_a:
+            coords_a = df[(df[trial_col] == trial_a) & (df[condition_col] == cond_a)][[x_col, y_col]].values
+            dh_ba = directed_hausdorff(coords_b, coords_a)[0]
+            results.append({
+                'From': cond_b,
+                'To': cond_a,
+                'Trial_From': trial_b,
+                'Trial_To': trial_a,
+                'Directed_Hausdorff': dh_ba
+            })
+
+    # Create result DataFrame
+    dist_df = pd.DataFrame(results)
+    dist_df['Direction'] = dist_df['From'] + ' → ' + dist_df['To']
+
+    # Plot
+    plt.figure(figsize=(10, 6))
+    sns.boxplot(data=dist_df, x='Direction', y='Directed_Hausdorff', palette='Set2')
+    sns.stripplot(data=dist_df, x='Direction', y='Directed_Hausdorff', color='black', alpha=0.5, jitter=True)
+    plt.title('Directed Hausdorff Distances Between Trials')
+    plt.ylabel('Directed Hausdorff Distance')
+    plt.xlabel('Direction')
+    plt.tight_layout()
+    plt.show()
+
+    return dist_df
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def plot_preference_index_and_speed(dataframe):
+    """
+    Plots the mean Preference Index and Speed over time for each condition in a 1x2 subplot.
+    Speed values outside the range [0.5, 2] are excluded from the Speed plot.
+
+    Parameters:
+        dataframe (pd.DataFrame): Input DataFrame with columns ['Y', 'Frame', 'Trial', 'Condition', 'Speed']
+    """
+    # Define Y boundaries for 3 horizontal zones
+    y_min, y_max = dataframe['Y'].min(), dataframe['Y'].max()
+    y_range = (y_max - y_min) / 3
+    zone_bounds = [y_min, y_min + y_range, y_min + 2 * y_range, y_max]
+
+    frame_data = []
+
+    for condition in dataframe['Condition'].unique():
+        df_condition = dataframe[dataframe['Condition'] == condition]
+
+        for trial in df_condition['Trial'].unique():
+            df_trial = df_condition[df_condition['Trial'] == trial]
+
+            for frame in df_trial['Frame'].unique():
+                df_frame = df_trial[df_trial['Frame'] == frame]
+                if df_frame.empty:
+                    continue
+
+                z1 = np.sum(df_frame['Y'] < zone_bounds[1])
+                z2 = np.sum((df_frame['Y'] >= zone_bounds[1]) & (df_frame['Y'] < zone_bounds[2]))
+                z3 = np.sum(df_frame['Y'] >= zone_bounds[2])
+                total = z1 + z2 + z3
+
+                if total == 0:
+                    continue
+
+                pi = (z1 - z3) / total
+
+                # Filter Speed values
+                if 'Speed' in df_frame:
+                    valid_speeds = df_frame['Speed'][(df_frame['Speed'] >= 0.5) & (df_frame['Speed'] <= 2)]
+                    avg_speed = valid_speeds.mean() if not valid_speeds.empty else np.nan
+                else:
+                    avg_speed = np.nan
+
+                frame_data.append({
+                    'Condition': condition,
+                    'Trial': trial,
+                    'Frame': frame,
+                    'PreferenceIndex': pi,
+                    'Speed': avg_speed
+                })
+
+    df_frames = pd.DataFrame(frame_data)
+
+    # Plot side-by-side subplots
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharex=True)
+
+    # Preference Index subplot
+    sns.lineplot(
+        data=df_frames,
+        x='Frame',
+        y='PreferenceIndex',
+        hue='Condition',
+        estimator='mean',
+        ci='sd',
+        palette='muted',
+        lw=2,
+        ax=axes[0]
+    )
+    axes[0].axhline(0, color='gray', linestyle='--', lw=1)
+    axes[0].set_ylabel("Preference Index (Z1 - Z3)")
+    axes[0].set_xlabel("Frame")
+    axes[0].set_title("Mean Preference Index Over Time")
+    axes[0].legend(title="Condition")
+
+    # Speed subplot (drop NaN values)
+    df_speed_valid = df_frames.dropna(subset=['Speed'])
+
+    sns.lineplot(
+        data=df_speed_valid,
+        x='Frame',
+        y='Speed',
+        hue='Condition',
+        estimator='mean',
+        ci='sd',
+        palette='muted',
+        lw=2,
+        ax=axes[1]
+    )
+    axes[1].set_ylabel("Speed")
+    axes[1].set_xlabel("Frame")
+    axes[1].set_title("Mean Speed Over Time (0.5 ≤ Speed ≤ 2)")
+    axes[1].legend(title="Condition")
+
+    plt.tight_layout()
+    plt.show()
