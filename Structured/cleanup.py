@@ -326,3 +326,7 @@ def create_combined_real_simulated_df(df, group_size=15, n_bootstrap=8, seed=Non
 
     return combined_df
 
+import matplotlib.pyplot as plt
+import seaborn as sbs
+
+
