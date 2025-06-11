@@ -330,3 +330,86 @@ import matplotlib.pyplot as plt
 import seaborn as sbs
 
 
+import pandas as pd
+import numpy as np
+
+def compute_polarization_with_context(df):
+    """
+    Computes the polarization toward -y direction for each frame,
+    and merges it back into the original DataFrame so all original
+    columns are retained.
+
+    Parameters:
+        df (pd.DataFrame): Input dataframe with columns:
+            'Individual', 'Trial', 'Condition', 'Frame', 'x', 'y'
+
+    Returns:
+        pd.DataFrame: Original dataframe with an additional 'polarization' column
+    """
+    # Sort to ensure proper diff
+    df = df.sort_values(['Trial', 'Condition', 'Individual', 'Frame']).copy()
+
+    # Step 1: Compute motion vectors
+    df['dx'] = df.groupby(['Trial', 'Condition', 'Individual'])['X'].diff()
+    df['dy'] = df.groupby(['Trial', 'Condition', 'Individual'])['Y'].diff()
+
+    # Step 2: Normalize vectors
+    motion_norm = np.sqrt(df['dx']**2 + df['dy']**2)
+    df['dx_norm'] = df['dx'] / motion_norm
+    df['dy_norm'] = df['dy'] / motion_norm
+    df[['dx_norm', 'dy_norm']] = df[['dx_norm', 'dy_norm']].fillna(0)
+
+    # Step 3: Dot product with -y vector
+    df['dot_product'] = -df['dy_norm']
+
+    # Step 4: Compute average polarization per frame
+    polarization = (
+        df.groupby(['Trial', 'Condition', 'Frame'])['dot_product']
+        .mean()
+        .reset_index()
+        .rename(columns={'dot_product': 'polarization'})
+    )
+
+    # Step 5: Merge polarization back into original dataframe
+    df = df.merge(polarization, on=['Trial', 'Condition', 'Frame'], how='left')
+
+    return df
+
+def compute_polarization_and_speed(df):
+    """
+    Computes:
+      - Polarization toward the -y direction (without normalizing motion vectors)
+      - Individual speed (as raw vector magnitude)
+    
+    Returns the original dataframe with added columns:
+      - 'dx', 'dy': Motion vector components
+      - 'dot_product': Proxy for polarization
+      - 'speed': Euclidean magnitude of motion
+      - 'polarization': Average dot_product per Frame, Trial, Condition
+    """
+    # Ensure order for diff to work
+    df = df.sort_values(['Trial', 'Condition', 'Individual', 'Frame']).copy()
+
+    # Step 1: Compute motion vectors
+    df['dx'] = df.groupby(['Trial', 'Condition', 'Individual'])['X'].diff()
+    df['dy'] = df.groupby(['Trial', 'Condition', 'Individual'])['Y'].diff()
+
+    # Step 2: Polarization = dot product with [0, -1] = -dy (not normalized)
+    df['dot_product'] = -df['dy']
+
+    # Step 3: Compute individual speed (magnitude of motion)
+    df['speed'] = np.sqrt(df['dx']**2 + df['dy']**2)
+
+    # Step 4: Compute average polarization per frame
+    polarization = (
+        df.groupby(['Trial', 'Condition', 'Frame'])['dot_product']
+        .mean()
+        .reset_index()
+        .rename(columns={'dot_product': 'polarization'})
+    )
+
+    # Step 5: Merge polarization back into the full dataframe
+    df = df.merge(polarization, on=['Trial', 'Condition', 'Frame'], how='left')
+
+    return df
+
