@@ -1357,7 +1357,17 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-def plot_time_to_target_distribution(
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def analyze_and_plot_target_acquisition(
     df,
     target_x=14,
     target_y=2,
@@ -1370,6 +1380,8 @@ def plot_time_to_target_distribution(
     condition_col='Condition'
 ):
     df = df.copy()
+    
+    # Compute distance from target
     df['Distance'] = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
 
     # First frame within radius
@@ -1377,214 +1389,42 @@ def plot_time_to_target_distribution(
     first_hits = within.groupby(individual_col)[frame_col].min().reset_index()
     first_hits.columns = [individual_col, 'TargetFrame']
 
-    # Start and end frames
+    # Frame bounds for each individual
     frame_bounds = df.groupby(individual_col)[frame_col].agg(['min', 'max']).reset_index()
     frame_bounds.columns = [individual_col, 'StartFrame', 'LastFrame']
 
-    # Merge
+    # Merge and compute time to target
     time_to_target = frame_bounds.merge(first_hits, on=individual_col, how='left')
 
     if assign_max_if_unreached:
-        # Assign TargetFrame = LastFrame for those who never reached
         time_to_target['TargetFrame'] = time_to_target['TargetFrame'].fillna(time_to_target['LastFrame'])
 
     time_to_target['TimeToTarget'] = time_to_target['TargetFrame'] - time_to_target['StartFrame']
 
-    # Add condition
+    # Merge in condition info
     conditions = df[[individual_col, condition_col]].drop_duplicates()
     time_to_target = time_to_target.merge(conditions, on=individual_col, how='left')
 
-    # Plot
-    import seaborn as sns
-    import matplotlib.pyplot as plt
+    # Alphabetical order of conditions
+    condition_order = sorted(time_to_target[condition_col].dropna().unique())
 
+    # Plot 1: Time to target
     plt.figure(figsize=(10, 6))
-    sns.boxplot(data=time_to_target, x=condition_col, y='TimeToTarget')
-    sns.stripplot(data=time_to_target, x=condition_col, y='TimeToTarget', color='black', alpha=0.5)
+    sns.boxplot(data=time_to_target, x=condition_col, y='TimeToTarget', order=condition_order)
+    sns.stripplot(data=time_to_target, x=condition_col, y='TimeToTarget', color='black', alpha=0.5, order=condition_order)
     plt.title('Time to Reach Target by Condition')
     plt.ylabel('Time to Target (frames)')
     plt.xlabel('Condition')
-    plt.xticks(rotation = 45)
+    plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
 
-    return time_to_target
+    # Determine who successfully reached the target before their last frame
+    reached = time_to_target[time_to_target['TargetFrame'] < time_to_target['LastFrame']]
 
-from scipy.stats import ttest_ind, mannwhitneyu
-from itertools import combinations
-import pandas as pd
-
-def pairwise_condition_tests(df, condition_col='Condition', value_col='TimeToTarget'):
-    """
-    Performs pairwise t-tests and Mann–Whitney U tests between all condition groups.
-    
-    Parameters:
-        df: DataFrame containing a column with condition labels and a numeric value column.
-        condition_col: Name of the condition/group column.
-        value_col: Name of the numeric column to compare (e.g., TimeToTarget).
-        
-    Returns:
-        pd.DataFrame with pairwise test results.
-    """
-    results = []
-
-    # Get all unique pairwise combinations of conditions
-    conditions = df[condition_col].dropna().unique()
-    for cond1, cond2 in combinations(conditions, 2):
-        group1 = df[df[condition_col] == cond1][value_col].dropna()
-        group2 = df[df[condition_col] == cond2][value_col].dropna()
-
-        if len(group1) >= 2 and len(group2) >= 2:
-            # Welch's t-test
-            t_stat, t_p = ttest_ind(group1, group2, equal_var=False)
-            # Mann-Whitney U
-            u_stat, u_p = mannwhitneyu(group1, group2, alternative='two-sided')
-
-            results.append({
-                'Condition1': cond1,
-                'Condition2': cond2,
-                'T-test p': t_p,
-                'Mann-Whitney U p': u_p,
-                'n1': len(group1),
-                'n2': len(group2),
-                'Mean1': group1.mean(),
-                'Mean2': group2.mean()
-            })
-        else:
-            # Not enough data to run the test
-            results.append({
-                'Condition1': cond1,
-                'Condition2': cond2,
-                'T-test p': None,
-                'Mann-Whitney U p': None,
-                'n1': len(group1),
-                'n2': len(group2),
-                'Mean1': group1.mean() if len(group1) > 0 else None,
-                'Mean2': group2.mean() if len(group2) > 0 else None
-            })
-
-    return pd.DataFrame(results)
-
-from scipy.stats import ttest_ind, mannwhitneyu
-from itertools import combinations
-import pandas as pd
-
-def pairwise_condition_tests_with_success(df_all, reached_df, condition_col='Condition', value_col='TimeToTarget', individual_col='Individual'):
-    """
-    Pairwise tests on successful trials, with success rate info included.
-    
-    Parameters:
-        df_all: Full DataFrame (all individuals).
-        reached_df: Subset of df_all with only successful individuals.
-        
-    Returns:
-        DataFrame with pairwise test results and success rate context.
-    """
-    results = []
-    
-    # Compute success rate per condition
-    total_per_condition = df_all[individual_col].groupby(df_all[condition_col]).nunique()
-    success_per_condition = reached_df[individual_col].groupby(reached_df[condition_col]).nunique()
-    success_rate = (success_per_condition / total_per_condition).fillna(0)
-
-    # All unique condition pairs
-    conditions = df_all[condition_col].dropna().unique()
-    for cond1, cond2 in combinations(conditions, 2):
-        group1 = reached_df[reached_df[condition_col] == cond1][value_col].dropna()
-        group2 = reached_df[reached_df[condition_col] == cond2][value_col].dropna()
-
-        if len(group1) >= 2 and len(group2) >= 2:
-            t_stat, t_p = ttest_ind(group1, group2, equal_var=False)
-            u_stat, u_p = mannwhitneyu(group1, group2, alternative='two-sided')
-            
-            mean1 = group1.mean()
-            mean2 = group2.mean()
-            diff = mean1 - mean2
-            success1 = success_rate.get(cond1, 0)
-            success2 = success_rate.get(cond2, 0)
-            mean_success = (success1 + success2) / 2
-            
-            # Scaled mean difference (optional)
-            scaled_diff = diff * mean_success
-
-            results.append({
-                'Condition1': cond1,
-                'Condition2': cond2,
-                'Mean1': mean1,
-                'Mean2': mean2,
-                'MeanDiff': diff,
-                'ScaledMeanDiff': scaled_diff,
-                'SuccessRate1': success1,
-                'SuccessRate2': success2,
-                'T-test p': t_p,
-                'Mann-Whitney U p': u_p,
-                'n1': len(group1),
-                'n2': len(group2)
-            })
-        else:
-            results.append({
-                'Condition1': cond1,
-                'Condition2': cond2,
-                'Mean1': group1.mean() if len(group1) > 0 else None,
-                'Mean2': group2.mean() if len(group2) > 0 else None,
-                'MeanDiff': None,
-                'ScaledMeanDiff': None,
-                'SuccessRate1': success_rate.get(cond1, 0),
-                'SuccessRate2': success_rate.get(cond2, 0),
-                'T-test p': None,
-                'Mann-Whitney U p': None,
-                'n1': len(group1),
-                'n2': len(group2)
-            })
-
-    return pd.DataFrame(results)
-
-def print_success_rates(df_all, reached_df, condition_col='Condition', individual_col='Individual'):
-    """
-    Computes and prints success rates for each condition (alphabetically sorted).
-    
-    Parameters:
-        df_all: Full DataFrame of all individuals and conditions.
-        reached_df: Subset of df_all with only individuals who reached the target.
-        condition_col: Column indicating condition/group.
-        individual_col: Unique identifier for individuals.
-        
-    Returns:
-        DataFrame of success rates per condition.
-    """
-    # Total individuals per condition
-    total_per_condition = df_all.groupby(condition_col)[individual_col].nunique()
-    
-    # Successful individuals per condition
-    success_per_condition = reached_df.groupby(condition_col)[individual_col].nunique()
-    
-    # Compute success rate
-    success_rate = (success_per_condition / total_per_condition).fillna(0)
-    
-    # Assemble into DataFrame
-    result_df = pd.DataFrame({
-        'SuccessRate': success_rate
-    }).fillna(0).sort_index()  # <-- Alphabetical sort
-
-    print(result_df)
-    return result_df
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-def plot_success_rates(df_all, reached_df, condition_col='Condition', individual_col='Individual'):
-    """
-    Plots success rates per condition as a bar chart (alphabetically sorted).
-    
-    Parameters:
-        df_all: Full DataFrame of all individuals.
-        reached_df: DataFrame of individuals who reached the target.
-        condition_col: Name of condition column.
-        individual_col: Name of individual identifier column.
-    """
-    # Compute success rates
-    total_per_condition = df_all.groupby(condition_col)[individual_col].nunique()
-    success_per_condition = reached_df.groupby(condition_col)[individual_col].nunique()
+    # Plot 2: Success rates per condition
+    total_per_condition = time_to_target.groupby(condition_col)[individual_col].nunique()
+    success_per_condition = reached.groupby(condition_col)[individual_col].nunique()
     success_rate = (success_per_condition / total_per_condition).fillna(0)
 
     plot_df = success_rate.reset_index()
@@ -1592,13 +1432,48 @@ def plot_success_rates(df_all, reached_df, condition_col='Condition', individual
     plot_df = plot_df.sort_values(condition_col)
 
     plt.figure(figsize=(8, 5))
-    sns.barplot(data=plot_df, x=condition_col, y='SuccessRate', palette='viridis')
-
+    sns.barplot(data=plot_df, x=condition_col, y='SuccessRate', palette='viridis', order=condition_order)
     plt.ylim(0, 1)
     plt.ylabel('Success Rate')
     plt.xlabel('Condition')
     plt.title('Success Rate per Condition')
-    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))  # format y-axis as %
-    plt.xticks(rotation = 45)
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
+
+    # Plot 3: Success rate over time
+    reached_with_condition = reached[[individual_col, 'TargetFrame', condition_col]].copy()
+    
+    # Get all unique individuals per condition
+    total_inds_per_condition = time_to_target.groupby(condition_col)[individual_col].nunique().to_dict()
+    
+    # Expand target frames to cumulative count per frame
+    frame_range = np.sort(df[frame_col].unique())
+
+    cumulative_success = []
+
+    for condition in condition_order:
+        subset = reached_with_condition[reached_with_condition[condition_col] == condition]
+        for frame in frame_range:
+            count = (subset['TargetFrame'] <= frame).sum()
+            rate = count / total_inds_per_condition[condition]
+            cumulative_success.append({
+                'Frame': frame,
+                'Condition': condition,
+                'SuccessRate': rate
+            })
+
+    cumulative_df = pd.DataFrame(cumulative_success)
+
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(data=cumulative_df, x='Frame', y='SuccessRate', hue='Condition', hue_order=condition_order)
+    plt.title('Success Rate Over Time')
+    plt.ylabel('Cumulative Success Rate')
+    plt.xlabel('Frame')
+    plt.ylim(0, 1)
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    plt.tight_layout()
+    plt.show()
+
+    return time_to_target, reached, plot_df, cumulative_df
