@@ -1352,15 +1352,6 @@ def compute_and_plot_dhd(df, condition_col='Condition', trial_col='Trial', x_col
 
     return dist_df
 
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 import numpy as np
 import pandas as pd
@@ -1475,5 +1466,3 @@ def analyze_and_plot_target_acquisition(
     plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
     plt.tight_layout()
     plt.show()
-
-    return time_to_target, reached, plot_df, cumulative_df
