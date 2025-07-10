@@ -983,10 +983,10 @@ def plot_speed_kde_by_genotype(df, speed_col='Speed', genotype_col='Genotype', c
         mean_speed = group[speed_col].mean()
         plt.axvline(mean_speed, color=color, linestyle='--', alpha=0.7)
 
-    plt.title('Speed Distribution by Genotype (KDE + Mean Lines)')
+    plt.title('Speed Distribution (KDE + Mean Lines)')
     plt.xlabel('Speed')
     plt.ylabel('Density')
-    plt.legend(title='Genotype')
+    plt.legend(title='Parameter')
     plt.grid(True, linestyle='--', alpha=0.3)
     plt.tight_layout()
     plt.show()
@@ -1464,5 +1464,512 @@ def analyze_and_plot_target_acquisition(
     plt.xlabel('Frame')
     plt.ylim(0, 1)
     plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    plt.tight_layout()
+    plt.show()
+
+    return cumulative_df
+
+def plot_target_proximity_by_frame_bins(
+    df,
+    target_x=14,
+    target_y=2,
+    radius=2,
+    bin_size=100,
+    frame_col='Frame',
+    individual_col='Individual',
+    x_col='X',
+    y_col='Y',
+    condition_col='Condition'
+):
+    df = df.copy()
+
+    # Calculate distance from target
+    df['Distance'] = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
+
+    # Determine if individual is at the target
+    df['AtTarget'] = df['Distance'] <= radius
+
+    # Assign frame bins
+    df['FrameBin'] = (df[frame_col] // bin_size) * bin_size
+
+    # Get total number of individuals per condition
+    total_inds_per_condition = df[[individual_col, condition_col]].drop_duplicates()
+    total_counts = total_inds_per_condition.groupby(condition_col)[individual_col].nunique().to_dict()
+
+    # Filter to only those at the target
+    at_target_df = df[df['AtTarget']].drop_duplicates(subset=[individual_col, 'FrameBin'])
+
+    # Count individuals at target per frame bin and condition
+    bin_counts = (
+        at_target_df
+        .groupby(['FrameBin', condition_col])[individual_col]
+        .nunique()
+        .reset_index(name='CountAtTarget')
+    )
+
+    # Add total individuals and compute proportion
+    bin_counts['TotalIndividuals'] = bin_counts[condition_col].map(total_counts)
+    bin_counts['ProportionAtTarget'] = bin_counts['CountAtTarget'] / bin_counts['TotalIndividuals']
+
+    # Ensure full frame bin x condition matrix (fill missing with 0)
+    all_bins = df['FrameBin'].unique()
+    all_conditions = df[condition_col].unique()
+    full_index = pd.MultiIndex.from_product([all_bins, all_conditions], names=['FrameBin', condition_col])
+    bin_counts = bin_counts.set_index(['FrameBin', condition_col]).reindex(full_index, fill_value=0).reset_index()
+
+    # Sort for plotting
+    bin_counts = bin_counts.sort_values(by=['FrameBin', condition_col])
+
+    # Plot
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(data=bin_counts, x='FrameBin', y='ProportionAtTarget', hue=condition_col)
+    plt.title('Proportion of Individuals at Target Over Time (Binned)')
+    plt.ylabel('Proportion at Target')
+    plt.xlabel('Frame Bin')
+    plt.ylim(0, 1)
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+def sholl_analysis_over_time(
+    df,
+    target_x=14,
+    target_y=2,
+    bin_size=100,
+    frame_col='Frame',
+    individual_col='Individual',
+    x_col='X',
+    y_col='Y',
+    max_radius=10,
+    condition_col='Condition'
+):
+    df = df.copy()
+    
+    # Get condition name (assumes one condition per call)
+    condition_name = df[condition_col].iloc[0] if condition_col in df.columns and not df.empty else "Unknown"
+
+    # Compute distance from target and assign Sholl ring
+    df['Distance'] = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
+    df['ShollRing'] = df['Distance'].astype(int)  # 0 for 0-1cm, 1 for 1-2cm, etc.
+    df = df[df['ShollRing'] <= max_radius]
+
+    # Assign frame bins
+    df['FrameBin'] = (df[frame_col] // bin_size) * bin_size
+
+    # Count unique individuals per ring per bin
+    grouped = (
+        df.groupby(['FrameBin', 'ShollRing'])[individual_col]
+        .nunique()
+        .reset_index(name='Count')
+    )
+
+    # Total individuals per frame bin (for normalization)
+    total_per_bin = (
+        df.groupby('FrameBin')[individual_col]
+        .nunique()
+        .reset_index(name='TotalIndividuals')
+    )
+
+    # Merge to normalize
+    grouped = grouped.merge(total_per_bin, on='FrameBin', how='left')
+    grouped['Proportion'] = grouped['Count'] / grouped['TotalIndividuals']
+
+    # Pivot to heatmap format
+    heatmap_df = grouped.pivot(index='ShollRing', columns='FrameBin', values='Proportion').fillna(0)
+
+    # Plot heatmap
+    plt.figure(figsize=(12, 6))
+    sns.heatmap(
+        heatmap_df, 
+        cmap='viridis', 
+        cbar_kws={'label': 'Proportion of Individuals'}
+    )
+    plt.title(f'Sholl Analysis Heatmap (Normalized) – Condition: {condition_name}')
+    plt.ylabel('Sholl Ring (Distance from Target in cm)')
+    plt.xlabel('Frame Bin')
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.optimize import curve_fit
+
+def logistic(x, L, k, x0):
+    """Logistic function: L / (1 + exp(-k*(x-x0)))"""
+    return L / (1 + np.exp(-k * (x - x0)))
+
+def r_squared(ydata, ypred):
+    ss_res = np.sum((ydata - ypred) ** 2)
+    ss_tot = np.sum((ydata - np.mean(ydata)) ** 2)
+    return 1 - (ss_res / ss_tot)
+
+def rmse(ydata, ypred):
+    return np.sqrt(np.mean((ydata - ypred) ** 2))
+
+def plot_residuals(xdata, ydata, popt, condition):
+    ypred = logistic(xdata, *popt)
+    residuals = ydata - ypred
+    plt.figure(figsize=(8,4))
+    plt.scatter(xdata, residuals)
+    plt.axhline(0, color='red', linestyle='--')
+    plt.xlabel('Frame')
+    plt.ylabel('Residual (Observed - Predicted)')
+    plt.title(f'Residuals Plot for Condition: {condition}')
+    plt.show()
+
+def fit_logistic_to_success(
+    cumulative_df,
+    frame_col='Frame',
+    condition_col='Condition',
+    success_col='SuccessRate',
+    plot_residuals_flag=False,
+    print_rmse_flag=False
+):
+    """
+    Fits logistic curves to cumulative success rates per condition.
+
+    Parameters:
+    - cumulative_df: DataFrame with columns [Frame, Condition, SuccessRate]
+    - frame_col: name of the frame/time column
+    - condition_col: name of the condition column
+    - success_col: name of the success rate column
+    - plot_residuals_flag: bool, whether to plot residuals for each fit
+    - print_rmse_flag: bool, whether to print RMSE values for each fit
+
+    Returns:
+    - params_df: DataFrame of logistic parameters and R² per condition
+    """
+    condition_order = sorted(cumulative_df[condition_col].unique())
+    params_list = []
+
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(data=cumulative_df, x=frame_col, y=success_col, hue=condition_col, palette='tab10', alpha=0.6)
+
+    for condition in condition_order:
+        subset = cumulative_df[cumulative_df[condition_col] == condition]
+        xdata = subset[frame_col].values
+        ydata = subset[success_col].values
+
+        # Initial parameter guesses: L=1, k=0.1, x0=median frame
+        p0 = [1, 0.1, np.median(xdata)]
+
+        try:
+            popt, _ = curve_fit(logistic, xdata, ydata, p0=p0, bounds=([0, 0, min(xdata)], [1.5, 5, max(xdata)]))
+            L, k, x0 = popt
+
+            ypred = logistic(xdata, *popt)
+            r2 = r_squared(ydata, ypred)
+
+            if print_rmse_flag:
+                error = rmse(ydata, ypred)
+                print(f"Condition: {condition}, RMSE: {error:.4f}")
+
+            if plot_residuals_flag:
+                plot_residuals(xdata, ydata, popt, condition)
+
+            params_list.append({'Condition': condition, 'L': L, 'k': k, 'x0': x0, 'R2': r2})
+
+            xfit = np.linspace(min(xdata), max(xdata), 200)
+            yfit = logistic(xfit, *popt)
+            plt.plot(xfit, yfit, label=f'Logistic Fit: {condition} (R²={r2:.2f})')
+
+        except RuntimeError:
+            print(f"Fit did not converge for condition: {condition}")
+            params_list.append({'Condition': condition, 'L': np.nan, 'k': np.nan, 'x0': np.nan, 'R2': np.nan})
+
+    plt.title('Cumulative Success Rate with Logistic Fits')
+    plt.ylabel('Cumulative Success Rate')
+    plt.xlabel('Frame')
+    plt.ylim(0, 1)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    params_df = pd.DataFrame(params_list)
+    return params_df
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
+def radial_sholl_heatmap(
+    df,
+    target_x=14,
+    target_y=2,
+    bin_size=100,
+    frame_col='Frame',
+    individual_col='Individual',
+    x_col='X',
+    y_col='Y',
+    max_radius=10,
+    condition_col='Condition'
+):
+    df = df.copy()
+
+    # Get condition name
+    condition_name = df[condition_col].iloc[0] if condition_col in df.columns and not df.empty else "Unknown"
+
+    # Compute distances and assign Sholl rings
+    df['Distance'] = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
+    df['ShollRing'] = df['Distance'].astype(int)
+    df = df[df['ShollRing'] <= max_radius]
+
+    # Assign frame bins
+    df['FrameBin'] = (df[frame_col] // bin_size) * bin_size
+
+    # Count unique individuals per ring per bin
+    grouped = (
+        df.groupby(['FrameBin', 'ShollRing'])[individual_col]
+        .nunique()
+        .reset_index(name='Count')
+    )
+
+    # Total individuals per time bin (for normalization)
+    total_per_bin = (
+        df.groupby('FrameBin')[individual_col]
+        .nunique()
+        .reset_index(name='TotalIndividuals')
+    )
+
+    # Normalize
+    grouped = grouped.merge(total_per_bin, on='FrameBin', how='left')
+    grouped['Proportion'] = grouped['Count'] / grouped['TotalIndividuals']
+
+    # Get sorted frame bins
+    frame_bins = sorted(grouped['FrameBin'].unique())
+    num_bins = len(frame_bins)
+
+    # Prepare polar coordinates
+    theta = np.linspace(0, 2 * np.pi, num_bins, endpoint=False)
+    width = 2 * np.pi / num_bins
+
+    # Set up color map and normalization
+    cmap = plt.cm.viridis
+    norm = mpl.colors.Normalize(vmin=0, vmax=1)
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(9, 9), subplot_kw={'projection': 'polar'})
+
+    for i, fb in enumerate(frame_bins):
+        for r in range(max_radius + 1):
+            val = grouped.loc[
+                (grouped['FrameBin'] == fb) & (grouped['ShollRing'] == r),
+                'Proportion'
+            ]
+            proportion = val.values[0] if not val.empty else 0
+
+            # Draw each sector
+            ax.bar(
+                x=theta[i],
+                height=1,
+                width=width,
+                bottom=r,
+                color=cmap(norm(proportion)),
+                edgecolor='none'
+            )
+
+    # Cleanup: remove radial and circular grid lines
+    ax.grid(False)
+    ax.set_frame_on(False)
+    ax.set_yticks(range(max_radius + 1))
+    ax.set_yticklabels([f"{r} cm" for r in range(max_radius + 1)], fontsize=10)
+    ax.set_xticks(theta)
+    ax.set_xticklabels([str(fb) for fb in frame_bins], fontsize=9, rotation=90)
+
+    ax.set_title(f'Radial Sholl Analysis – Condition: {condition_name}', va='bottom', fontsize=14)
+
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, orientation='vertical', fraction=0.046, pad=0.1)
+    cbar.set_label('Proportion of Individuals', fontsize=12)
+
+    plt.tight_layout()
+    plt.show()
+
+def radial_sholl_heatmap_global_normalized(
+    df,
+    target_x=14,
+    target_y=2,
+    bin_size=100,
+    frame_col='Frame',
+    individual_col='Individual',
+    x_col='X',
+    y_col='Y',
+    max_radius=10,
+    condition_col='Condition'
+):
+    df = df.copy()
+
+    # Get condition name
+    condition_name = df[condition_col].iloc[0] if condition_col in df.columns and not df.empty else "Unknown"
+
+    # Compute distances and assign Sholl rings
+    df['Distance'] = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
+    df['ShollRing'] = df['Distance'].astype(int)
+    df = df[df['ShollRing'] <= max_radius]
+
+    # Assign frame bins
+    df['FrameBin'] = (df[frame_col] // bin_size) * bin_size
+
+    # Count unique individuals per ring per bin
+    grouped = (
+        df.groupby(['FrameBin', 'ShollRing'])[individual_col]
+        .nunique()
+        .reset_index(name='Count')
+    )
+
+    # Normalize globally: each count / total count over all bins and rings
+    total_count = grouped['Count'].sum()
+    grouped['Proportion'] = grouped['Count'] / total_count
+
+    # For plotting
+    frame_bins = sorted(grouped['FrameBin'].unique())
+    num_bins = len(frame_bins)
+
+    theta = np.linspace(0, 2 * np.pi, num_bins, endpoint=False)
+    width = 2 * np.pi / num_bins
+
+    cmap = plt.cm.viridis
+    norm = mpl.colors.Normalize(vmin=0, vmax=grouped['Proportion'].max())
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(9, 9), subplot_kw={'projection': 'polar'})
+
+    for i, fb in enumerate(frame_bins):
+        for r in range(max_radius + 1):
+            val = grouped.loc[
+                (grouped['FrameBin'] == fb) & (grouped['ShollRing'] == r),
+                'Proportion'
+            ]
+            proportion = val.values[0] if not val.empty else 0
+
+            ax.bar(
+                x=theta[i],
+                height=1,
+                width=width,
+                bottom=r,
+                color=cmap(norm(proportion)),
+                edgecolor='none'
+            )
+
+    # Clean up
+    ax.grid(False)
+    ax.set_frame_on(False)
+    ax.set_yticks(range(max_radius + 1))
+    ax.set_yticklabels([f"{r} cm" for r in range(max_radius + 1)], fontsize=10)
+    ax.set_xticks(theta)
+    ax.set_xticklabels([str(fb) for fb in frame_bins], fontsize=9, rotation=90)
+    ax.set_title(f'Radial Sholl (Global Normalized) – Condition: {condition_name}', va='bottom', fontsize=14)
+
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, orientation='vertical', fraction=0.046, pad=0.1)
+    cbar.set_label('Proportion of Total Detections', fontsize=12)
+
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
+def radial_sholl_heatmap_per_bin_normalized(
+    df,
+    target_x=14,
+    target_y=2,
+    bin_size=100,
+    frame_col='Frame',
+    individual_col='Individual',
+    x_col='X',
+    y_col='Y',
+    max_radius=10,
+    condition_col='Condition',
+    spatial_bin=1  # New parameter
+):
+    df = df.copy()
+
+    # Get condition name
+    condition_name = df[condition_col].iloc[0] if condition_col in df.columns and not df.empty else "Unknown"
+
+    # Compute distances and assign Sholl rings using spatial_bin
+    df['Distance'] = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
+    df['ShollRing'] = (df['Distance'] / spatial_bin).astype(int)
+    df = df[df['ShollRing'] <= max_radius]
+
+    # Assign frame bins
+    df['FrameBin'] = (df[frame_col] // bin_size) * bin_size
+
+    # Count unique individuals per ring per bin
+    grouped = (
+        df.groupby(['FrameBin', 'ShollRing'])[individual_col]
+        .nunique()
+        .reset_index(name='Count')
+    )
+
+    # Total per bin (for normalization)
+    total_per_bin = (
+        grouped.groupby('FrameBin')['Count']
+        .sum()
+        .reset_index(name='TotalCount')
+    )
+
+    # Merge and normalize per bin
+    grouped = grouped.merge(total_per_bin, on='FrameBin')
+    grouped['Proportion'] = grouped['Count'] / grouped['TotalCount']
+
+    # Set up polar coordinates
+    frame_bins = sorted(grouped['FrameBin'].unique())
+    num_bins = len(frame_bins)
+    theta = np.linspace(0, 2 * np.pi, num_bins, endpoint=False)
+    width = 2 * np.pi / num_bins
+
+    cmap = plt.cm.viridis
+    norm = mpl.colors.Normalize(vmin=0, vmax=grouped['Proportion'].max())
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(9, 9), subplot_kw={'projection': 'polar'})
+
+    for i, fb in enumerate(frame_bins):
+        for r in range(max_radius + 1):
+            val = grouped.loc[
+                (grouped['FrameBin'] == fb) & (grouped['ShollRing'] == r),
+                'Proportion'
+            ]
+            proportion = val.values[0] if not val.empty else 0
+
+            ax.bar(
+                x=theta[i],
+                height=spatial_bin,
+                width=width,
+                bottom=r * spatial_bin,
+                color=cmap(norm(proportion)),
+                edgecolor='none'
+            )
+
+    # Clean up
+    ax.grid(False)
+    ax.set_frame_on(False)
+    ax.set_yticks([r * spatial_bin for r in range(max_radius + 1)])
+    ax.set_yticklabels([f"{r * spatial_bin} units" for r in range(max_radius + 1)], fontsize=10)
+    ax.set_xticks(theta)
+    ax.set_xticklabels([str(fb) for fb in frame_bins], fontsize=9, rotation=90)
+    ax.set_title(f'Radial Sholl (Per-Bin Normalized) – Condition: {condition_name}', va='bottom', fontsize=14)
+
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, orientation='vertical', fraction=0.046, pad=0.1)
+    cbar.set_label('Proportion per Time Bin', fontsize=12)
+
     plt.tight_layout()
     plt.show()
