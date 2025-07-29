@@ -1,7 +1,17 @@
-def run_tukey_posthoc(df, value_col, factor_a, factor_b, min_val=None, max_val=None, alpha=0.05):
+def run_tukey_posthoc(
+    df,
+    value_col,
+    factor_a,
+    factor_b,
+    min_val=None,
+    max_val=None,
+    alpha=0.05,
+    trial_averages=True,
+    group_cols=['Starvation', 'Trial', 'Genotype'],  # Customizable if needed
+):
     """
     Performs Tukey's HSD post-hoc test on the specified value column across the interaction
-    groups of factor_a and factor_b.
+    groups of factor_a and factor_b, with optional group averaging.
 
     Parameters:
     -----------
@@ -19,6 +29,10 @@ def run_tukey_posthoc(df, value_col, factor_a, factor_b, min_val=None, max_val=N
         Maximum value threshold for value_col (inclusive).
     alpha : float, optional, default=0.05
         Significance level for Tukey HSD test.
+    trial_averages : bool, optional, default=False
+        Whether to average the value_col over specified group_cols before performing the test.
+    group_cols : list of str, optional
+        List of column names to group by for averaging (e.g., ['Genotype', 'Starvation', 'Trial']).
 
     Returns:
     --------
@@ -27,32 +41,34 @@ def run_tukey_posthoc(df, value_col, factor_a, factor_b, min_val=None, max_val=N
     summary_df : pandas.DataFrame
         Summary DataFrame of Tukey test results.
     """
-
     import pandas as pd
     from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
-    # Copy df to avoid modifying original
     df_clean = df.copy()
-
-    # Drop rows with missing in relevant columns
     df_clean = df_clean.dropna(subset=[value_col, factor_a, factor_b])
 
-    # Apply filtering bounds if provided
+    # Apply value bounds
     if min_val is not None:
         df_clean = df_clean[df_clean[value_col] >= min_val]
     if max_val is not None:
         df_clean = df_clean[df_clean[value_col] <= max_val]
 
-    # Create interaction group label
-    df_clean['Group'] = df_clean[factor_a].astype(str) + "_" + df_clean[factor_b].astype(str)
+    # Optional averaging per group (e.g., trial-level)
+    if trial_averages:
+        if group_cols is None:
+            raise ValueError("If trial_averages=True, you must provide group_cols.")
+        group_cols = list(set(group_cols + [factor_a, factor_b]))  # ensure both factors are included
+        df_clean = df_clean.groupby(group_cols)[value_col].mean().reset_index()
 
-    # Run Tukey HSD test
-    tukey = pairwise_tukeyhsd(endog=df_clean[value_col], groups=df_clean['Group'], alpha=alpha)
+    # Create interaction label
+    df_clean["Group"] = df_clean[factor_a].astype(str) + "_" + df_clean[factor_b].astype(str)
 
-    # Convert results summary to DataFrame
+    # Run Tukey HSD
+    tukey = pairwise_tukeyhsd(endog=df_clean[value_col], groups=df_clean["Group"], alpha=alpha)
     summary_df = pd.DataFrame(data=tukey.summary().data[1:], columns=tukey.summary().data[0])
 
     return tukey, summary_df
+
 
 def analyze_two_way_anova(
     df,
