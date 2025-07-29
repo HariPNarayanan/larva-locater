@@ -25,6 +25,10 @@ def run_two_way_anova(df, plot=True):
 
     # Drop rows with missing values in relevant columns
     df_clean = df.dropna(subset=['Speed', 'Genotype', 'Starvation'])
+    # Limiting the speed within specified thresholds
+    df_clean = df_clean[df_clean['Speed'] < 2.0]
+    df_clean = df_clean[df_clean['Speed'] > 0.5]
+
 
     # Convert to categorical
     df_clean['Genotype'] = df_clean['Genotype'].astype('category')
@@ -78,8 +82,13 @@ def run_tukey_posthoc(df):
     import pandas as pd
     from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
+    # Limit speed to specified thresholds
+    df_clean = df[df['Speed'] < 2.0]
+    df_clean = df_clean[df_clean['Speed'] > 0.5]
+    
     # Drop missing
     df_clean = df.dropna(subset=['Speed', 'Genotype', 'Starvation'])
+    
 
     # Create interaction group label
     df_clean['Group'] = df_clean['Genotype'].astype(str) + "_" + df_clean['Starvation'].astype(str)
