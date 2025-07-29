@@ -1,235 +1,202 @@
-def run_two_way_anova(df, plot=True):
+def run_tukey_posthoc(df, value_col, factor_a, factor_b, min_val=None, max_val=None, alpha=0.05):
     """
-    Runs a 2-way ANOVA on 'Speed' based on 'Genotype' and 'Starvation'.
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        DataFrame with columns 'Speed', 'Genotype', and 'Starvation'.
-    plot : bool, optional
-        Whether to display a bar plot of mean speeds with error bars.
-
-    Returns:
-    --------
-    anova_table : pandas.DataFrame
-        The ANOVA table (type II).
-    group_stats : pandas.DataFrame
-        Mean and SEM of Speed for each Genotype-Starvation group.
-    """
-    import pandas as pd
-    import numpy as np
-    import statsmodels.api as sm
-    from statsmodels.formula.api import ols
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-
-    # Drop rows with missing values in relevant columns
-    df_clean = df.dropna(subset=['Speed', 'Genotype', 'Starvation'])
-    # Limiting the speed within specified thresholds
-    df_clean = df_clean[df_clean['Speed'] < 2.0]
-    df_clean = df_clean[df_clean['Speed'] > 0.5]
-
-
-    # Convert to categorical
-    df_clean['Genotype'] = df_clean['Genotype'].astype('category')
-    df_clean['Starvation'] = df_clean['Starvation'].astype('category')
-
-    # 2-way ANOVA model
-    model = ols('Speed ~ C(Genotype) + C(Starvation) + C(Genotype):C(Starvation)', data=df_clean).fit()
-    anova_table = sm.stats.anova_lm(model, typ=2)
-
-    # Group stats
-    group_stats = df_clean.groupby(['Genotype', 'Starvation'])['Speed'].agg(['mean', 'sem']).reset_index()
-    group_stats.rename(columns={'mean': 'Mean_Speed', 'sem': 'SEM_Speed'}, inplace=True)
-
-    # Plot
-    if plot:
-        plt.figure(figsize=(8,6))
-        sns.barplot(
-            data=group_stats,
-            x='Genotype',
-            y='Mean_Speed',
-            hue='Starvation',
-            ci=None,
-            palette='viridis',
-            capsize=0.1,
-            errwidth=1,
-            yerr=group_stats['SEM_Speed']
-        )
-        plt.ylabel("Speed (cm/s)")
-        plt.title("Mean Speed by Genotype and Starvation")
-        plt.tight_layout()
-        plt.show()
-
-    return anova_table, group_stats
-
-def run_tukey_posthoc(df):
-    """
-    Performs Tukey's HSD post-hoc test on Speed across Genotype-Starvation combinations.
+    Performs Tukey's HSD post-hoc test on the specified value column across the interaction
+    groups of factor_a and factor_b.
 
     Parameters:
     -----------
     df : pandas.DataFrame
-        DataFrame with 'Speed', 'Genotype', and 'Starvation' columns.
+        Input dataframe.
+    value_col : str
+        Name of the numeric column to analyze.
+    factor_a : str
+        Name of the first categorical factor.
+    factor_b : str
+        Name of the second categorical factor.
+    min_val : float, optional
+        Minimum value threshold for value_col (inclusive).
+    max_val : float, optional
+        Maximum value threshold for value_col (inclusive).
+    alpha : float, optional, default=0.05
+        Significance level for Tukey HSD test.
 
     Returns:
     --------
-    tukey_result : statsmodels object
-        The result of the Tukey HSD test.
+    tukey_result : statsmodels.stats.multicomp.TukeyHSDResults
+        The result object from Tukey HSD test.
     summary_df : pandas.DataFrame
-        Summary table of significant group differences.
+        Summary DataFrame of Tukey test results.
     """
+
     import pandas as pd
     from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
-    # Limit speed to specified thresholds
-    df_clean = df[df['Speed'] < 2.0]
-    df_clean = df_clean[df_clean['Speed'] > 0.5]
-    
-    # Drop missing
-    df_clean = df.dropna(subset=['Speed', 'Genotype', 'Starvation'])
-    
+    # Copy df to avoid modifying original
+    df_clean = df.copy()
+
+    # Drop rows with missing in relevant columns
+    df_clean = df_clean.dropna(subset=[value_col, factor_a, factor_b])
+
+    # Apply filtering bounds if provided
+    if min_val is not None:
+        df_clean = df_clean[df_clean[value_col] >= min_val]
+    if max_val is not None:
+        df_clean = df_clean[df_clean[value_col] <= max_val]
 
     # Create interaction group label
-    df_clean['Group'] = df_clean['Genotype'].astype(str) + "_" + df_clean['Starvation'].astype(str)
+    df_clean['Group'] = df_clean[factor_a].astype(str) + "_" + df_clean[factor_b].astype(str)
 
-    # Tukey HSD
-    tukey = pairwise_tukeyhsd(endog=df_clean['Speed'], groups=df_clean['Group'], alpha=0.05)
+    # Run Tukey HSD test
+    tukey = pairwise_tukeyhsd(endog=df_clean[value_col], groups=df_clean['Group'], alpha=alpha)
 
-    # Convert to DataFrame
+    # Convert results summary to DataFrame
     summary_df = pd.DataFrame(data=tukey.summary().data[1:], columns=tukey.summary().data[0])
 
     return tukey, summary_df
 
-def analyze_preference_index(
-    df, 
-    condition_col='Condition', 
-    value_col='Preference Index', 
+def analyze_two_way_anova(
+    df,
+    factor_a='Genotype',
+    factor_b='Starvation',
+    value_col='Preference Index',
     alpha=0.05,
-    verbose=True
+    verbose=True,
+    trial_averages=True,
+    group_cols=['Starvation', 'Trial', 'Genotype'],  # Customizable if needed
+    return_data = False
 ):
     """
-    Analyzes the effect of a categorical condition on the Preference Index.
-    Automatically checks normality, applies Yeo-Johnson transformation if needed,
-    and selects appropriate statistical test (ANOVA or Kruskal-Wallis).
-    Includes post-hoc comparisons.
+    Performs a 2-way ANOVA on the effect of two categorical variables on a continuous outcome.
+    Optionally averages across trials before running the analysis.
+    Checks residual normality and applies Yeo-Johnson transformation if residuals are non-normal.
 
     Parameters:
     -----------
     df : pandas.DataFrame
         DataFrame containing the data.
-    condition_col : str
-        Column name for categorical condition (e.g., 'Condition').
+    factor_a : str
+        First categorical factor (e.g., 'Genotype').
+    factor_b : str
+        Second categorical factor (e.g., 'Starvation').
     value_col : str
-        Column name for the dependent variable (e.g., 'Preference Index').
+        Column name for the dependent variable.
     alpha : float
-        Significance threshold, default = 0.05.
+        Significance threshold for normality test.
     verbose : bool
-        Whether to print the summaries.
+        Whether to print summaries.
+    trial_averages : bool
+        Whether to average over repeated trials (grouped by `group_cols`) before analysis.
+    group_cols : list of str
+        Columns to group by when averaging trials (default ['Condition', 'Trial']).
 
     Returns:
     --------
     dict with:
-        - 'test': str, name of test used
-        - 'p': float, main test p-value
-        - 'normality': dict, Shapiro-Wilk p-values per group
-        - 'anova_table' or 'kruskal_stat': result of main test
-        - 'posthoc': post-hoc comparison table (Tukey or Dunn)
-        - 'transformed': bool, whether transformation was applied
+        - 'anova_table': ANOVA summary table
+        - 'normality_p': Shapiro-Wilk p-value for residuals
+        - 'transformed': bool, whether Yeo-Johnson transformation was applied
+        - 'model': fitted statsmodels ANOVA model object
+        - 'data_used': the preprocessed DataFrame actually used in analysis
     """
 
     import pandas as pd
     import numpy as np
-    from scipy.stats import shapiro, kruskal
+    from scipy.stats import shapiro
     from statsmodels.formula.api import ols
     import statsmodels.api as sm
-    from statsmodels.stats.multicomp import pairwise_tukeyhsd
     from sklearn.preprocessing import PowerTransformer
-    import scikit_posthocs as sp
 
-    df = df[[condition_col, value_col]].dropna()
+    # Optional trial-averaging step
+    # Inside the function
 
-    # Step 1: Shapiro-Wilk normality test for each group
-    normality_pvals = {}
-    for cond in df[condition_col].unique():
-        group = df[df[condition_col] == cond][value_col]
-        stat, pval = shapiro(group)
-        normality_pvals[cond] = pval
+    # Ensure factor_a and factor_b are preserved during grouping
+    if trial_averages:
+        groupby_cols = list(set(group_cols + [factor_a, factor_b]))
+        df = df.groupby(groupby_cols).mean(numeric_only=True).reset_index()
 
-    normal_groups = all(p > alpha for p in normality_pvals.values())
-
-    # Step 2: Transformation if needed
+    # Keep only relevant columns and drop NA
+    df_clean = df[[factor_a, factor_b, value_col]].dropna()
     transformed = False
-    df_transformed = df.copy()
-    if not normal_groups:
+    value_col_used = value_col
+
+    def run_anova(data, dep_col):
+        model = ols(f'Q("{dep_col}") ~ C(Q("{factor_a}")) * C(Q("{factor_b}"))', data=data).fit()
+        anova_table = sm.stats.anova_lm(model, typ=2)
+        residuals = model.resid
+        shapiro_p = shapiro(residuals)[1]
+        return model, anova_table, shapiro_p
+
+    # Initial ANOVA
+    model, anova_table, shapiro_p = run_anova(df_clean, value_col)
+
+    if verbose:
+        print("▶️ Initial 2-way ANOVA Results:")
+        print(anova_table)
+        print(f"\n▶️ Shapiro-Wilk p-value for residuals: {shapiro_p:.4f}")
+
+    # Apply transformation if needed
+    if shapiro_p < alpha:
         pt = PowerTransformer(method='yeo-johnson')
-        df_transformed[value_col + '_trans'] = pt.fit_transform(df[[value_col]])
+        df_clean[value_col + '_trans'] = pt.fit_transform(df_clean[[value_col]])
         value_col_used = value_col + '_trans'
         transformed = True
 
-        # Re-check normality (optional: rerun Shapiro here if you'd like)
-    else:
-        value_col_used = value_col
-
-    # Step 3: Homogeneity check skipped for simplicity; go with test selection
-    groups = [group[value_col_used].values for name, group in df_transformed.groupby(condition_col)]
-
-    if normal_groups:
-        # ANOVA
-        model = ols(f'Q("{value_col_used}") ~ C(Q("{condition_col}"))', data=df_transformed).fit()
-        anova_table = sm.stats.anova_lm(model, typ=2)
-        p_main = anova_table['PR(>F)'][0]
-        test_type = 'ANOVA'
-
-        # Post-hoc
-        tukey = pairwise_tukeyhsd(df_transformed[value_col_used], df_transformed[condition_col])
-        posthoc_result = pd.DataFrame(data=tukey.summary().data[1:], columns=tukey.summary().data[0])
+        # Re-run ANOVA
+        model, anova_table, shapiro_p = run_anova(df_clean, value_col_used)
 
         if verbose:
-            print("▶️ Test Used: ANOVA")
+            print("\n⚠️ Residuals not normal — applied Yeo-Johnson transformation.")
+            print("▶️ Transformed 2-way ANOVA Results:")
             print(anova_table)
-            print("\n▶️ Tukey Post-hoc:")
-            print(posthoc_result)
+            print(f"\n▶️ Shapiro-Wilk p-value for transformed residuals: {shapiro_p:.4f}")
+
+    from scipy.stats import ttest_ind
+    import warnings
+
+    def compute_simple_effects(df, factor_a, factor_b, value_col):
+        """
+        Computes simple effects of factor A within levels of factor B and vice versa.
+        Only supports 2-level factors for now.
+        """
+        simple_effects = {}
+
+        # A within levels of B
+        effects_a_within_b = {}
+        for b_level in df[factor_b].unique():
+            subset = df[df[factor_b] == b_level]
+            groups = [group[value_col].values for name, group in subset.groupby(factor_a)]
+            if len(groups) == 2:
+                stat, pval = ttest_ind(*groups, equal_var=False)
+                effects_a_within_b[b_level] = {'t': stat, 'p': pval}
+            else:
+                warnings.warn(f"More than 2 levels in {factor_a}; skipping post-hoc for {factor_b}={b_level}")
+        
+        # B within levels of A
+        effects_b_within_a = {}
+        for a_level in df[factor_a].unique():
+            subset = df[df[factor_a] == a_level]
+            groups = [group[value_col].values for name, group in subset.groupby(factor_b)]
+            if len(groups) == 2:
+                stat, pval = ttest_ind(*groups, equal_var=False)
+                effects_b_within_a[a_level] = {'t': stat, 'p': pval}
+            else:
+                warnings.warn(f"More than 2 levels in {factor_b}; skipping post-hoc for {factor_a}={a_level}")
 
         return {
-            'test': test_type,
-            'p': p_main,
-            'normality': normality_pvals,
-            'anova_table': anova_table,
-            'posthoc': posthoc_result,
-            'transformed': transformed
-        }
+            f'{factor_a}_within_{factor_b}': effects_a_within_b,
+            f'{factor_b}_within_{factor_a}': effects_b_within_a
+        }    
 
-    else:
-        # Kruskal-Wallis
-        stat, p_kruskal = kruskal(*groups)
-        test_type = 'Kruskal-Wallis'
+    # Compute simple effects
+    simple_effects = compute_simple_effects(df_clean, factor_a, factor_b, value_col_used)
 
-        # Post-hoc: Dunn's test
-        posthoc_result = sp.posthoc_dunn(df, val_col=value_col, group_col=condition_col, p_adjust='holm')
+    return {
+        'anova_table': anova_table,
+        'normality_p': shapiro_p,
+        'transformed': transformed,
+        'model': model,
+        'simple_effects': simple_effects
+     }
 
-        if verbose:
-            print("▶️ Test Used: Kruskal-Wallis")
-            print(f"H = {stat:.4f}, p = {p_kruskal:.4f}")
-            print("\n▶️ Dunn Post-hoc (Holm-adjusted):")
-            print(posthoc_result)
-
-        return {
-            'test': test_type,
-            'p': p_kruskal,
-            'normality': normality_pvals,
-            'kruskal_stat': stat,
-            'posthoc': posthoc_result,
-            'transformed': transformed
-        }
-
-    # Summary logic reminder (included for future reference):
-    """
-    Analysis Flow:
-    → Grouped by 'Condition':
-        └── Shapiro-Wilk test for normality
-            └── If not normal → Yeo-Johnson transform
-                └── Recheck normality (optional)
-                    ├── If normal → One-way ANOVA + Tukey
-                    └── If still not normal → Kruskal-Wallis + Dunn (Holm-corrected)
-    """
+    if return_data:
+        result['data_used'] = df_clean
