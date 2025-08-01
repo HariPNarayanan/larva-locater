@@ -1973,3 +1973,66 @@ def radial_sholl_heatmap_per_bin_normalized(
 
     plt.tight_layout()
     plt.show()
+
+def plot_group_means(df, value_col, factor_a, factor_b, min_val=None, max_val=None, trial_averages=True, group_cols=None):
+    """
+    Quickly plots mean of `value_col` across interaction groups defined by `factor_a` and `factor_b`.
+
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        Input dataframe.
+    value_col : str
+        Name of the numeric column to plot.
+    factor_a : str
+        First grouping factor (e.g., 'Genotype').
+    factor_b : str
+        Second grouping factor (e.g., 'Starvation').
+    min_val : float, optional
+        Lower bound filter for value_col.
+    max_val : float, optional
+        Upper bound filter for value_col.
+    trial_averages : bool, default=True
+        Whether to average over group_cols.
+    group_cols : list of str, optional
+        Columns to group by for averaging if trial_averages is True.
+
+    Returns:
+    --------
+    None (plots directly)
+    """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    df_clean = df.copy()
+    df_clean = df_clean.dropna(subset=[value_col, factor_a, factor_b])
+
+    # Apply bounds
+    if min_val is not None:
+        df_clean = df_clean[df_clean[value_col] >= min_val]
+    if max_val is not None:
+        df_clean = df_clean[df_clean[value_col] <= max_val]
+
+    # Optional averaging per group
+    if trial_averages:
+        if group_cols is None:
+            group_cols = [factor_a, factor_b]
+        else:
+            group_cols = list(set(group_cols + [factor_a, factor_b]))
+        df_clean = df_clean.groupby(group_cols)[value_col].mean().reset_index()
+
+    # Interaction label
+    df_clean["Group"] = df_clean[factor_a].astype(str) + "_" + df_clean[factor_b].astype(str)
+
+    # Compute group means
+    group_means = df_clean.groupby("Group")[value_col].mean().sort_index()
+
+    # Plot
+    plt.figure(figsize=(8, 5))
+    group_means.plot(kind="bar", color="skyblue", edgecolor="black")
+    plt.ylabel(f"Mean {value_col}")
+    plt.title(f"Mean {value_col} by {factor_a} x {factor_b}")
+    plt.xticks(rotation=45, ha='right')
+    plt.grid(axis="y", linestyle="--", alpha=0.5)
+    plt.tight_layout()
+    plt.show()

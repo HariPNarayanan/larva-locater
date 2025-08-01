@@ -29,7 +29,7 @@ def run_tukey_posthoc(
         Maximum value threshold for value_col (inclusive).
     alpha : float, optional, default=0.05
         Significance level for Tukey HSD test.
-    trial_averages : bool, optional, default=False
+    trial_averages : bool, optional, default=True
         Whether to average the value_col over specified group_cols before performing the test.
     group_cols : list of str, optional
         List of column names to group by for averaging (e.g., ['Genotype', 'Starvation', 'Trial']).
@@ -40,6 +40,8 @@ def run_tukey_posthoc(
         The result object from Tukey HSD test.
     summary_df : pandas.DataFrame
         Summary DataFrame of Tukey test results.
+    group_means : pandas.Series
+        Mean values of value_col for each factor_a-factor_b group.
     """
     import pandas as pd
     from statsmodels.stats.multicomp import pairwise_tukeyhsd
@@ -67,7 +69,10 @@ def run_tukey_posthoc(
     tukey = pairwise_tukeyhsd(endog=df_clean[value_col], groups=df_clean["Group"], alpha=alpha)
     summary_df = pd.DataFrame(data=tukey.summary().data[1:], columns=tukey.summary().data[0])
 
-    return tukey, summary_df
+    # Compute and return group means
+    group_means = df_clean.groupby("Group")[value_col].mean().sort_index()
+
+    return tukey, summary_df, group_means
 
 
 def analyze_two_way_anova(
