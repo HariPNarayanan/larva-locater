@@ -350,11 +350,8 @@ def analyze_two_way_anova_permutation(
 
     # ---------- 0) Trial averaging (optional) ----------
     if trial_averages:
-        groupby_cols = [condition_col, frame_col, factor_a, factor_b]
-        df = (
-            df.groupby(groupby_cols, as_index=False)
-              .mean(numeric_only=True)
-        )
+        groupby_cols = ['Trial', factor_a, factor_b]  # Or whatever column uniquely identifies a trial
+        df = df.groupby(groupby_cols, as_index=False)[value_col].mean()
 
     # Keep relevant columns and drop NA
     df_clean = df[[factor_a, factor_b, value_col]].dropna().copy()
@@ -422,6 +419,9 @@ def analyze_two_way_anova_permutation(
 
         F_perm = np.empty(n_perm, dtype=float)
         for b in range(n_perm):
+            # Optional progress display every 10% of iterations
+            if verbose and (b % max(1, n_perm // 10) == 0):
+                print(f"  Permutation {b+1} / {n_perm} ({(b+1)/n_perm*100:.0f}%)")
             # Permute residuals, reconstruct response under H0
             y_perm = yhat_red + resid[rng.permutation(resid.shape[0])]
             # Refit full model on permuted response
@@ -602,3 +602,113 @@ def analyze_two_way_anova_permutation(
         result['data_used'] = df_clean
 
     return result
+
+import itertools
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import ttest_ind
+from statannotations.Annotator import Annotator
+
+
+import itertools
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import ttest_ind
+from statannotations.Annotator import Annotator
+
+
+import itertools
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import ttest_ind, mannwhitneyu
+from statannotations.Annotator import Annotator
+
+
+def pairwise_tests_plot(df, x="Genotype", hue="Starvation", y="Preference Index",
+                        pairs=None, title="Pairwise Comparisons",
+                        trial_averages=False, trial_col="Trial",
+                        test="welch"):
+    """
+    Perform pairwise tests between groups and plot results.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain columns for x, hue, and y.
+    x : str
+        Column for the x-axis (e.g. Genotype).
+    hue : str
+        Column for hue groups (e.g. Starvation).
+    y : str
+        Column with numeric dependent variable.
+    pairs : list of tuple
+        Optional. List of pairs to compare, e.g. [(('TNTex5HT7','Fed'), ('TNTex5HT7','5h'))]
+    title : str
+        Title of the plot.
+    trial_averages : bool
+        If True, averages over trials before testing.
+    trial_col : str
+        Column that identifies trials (used only if trial_averages=True).
+    test : str
+        "welch" for Welch's t-test (parametric) or "mannwhitney" for Mann-Whitney U test (non-parametric).
+    """
+
+    df = df.copy()
+
+    # ---------- 0) Trial averaging (optional) ----------
+    if trial_averages:
+        groupby_cols = [trial_col, x, hue]
+        df = df.groupby(groupby_cols, as_index=False)[y].mean()
+
+    # Create combined condition labels for pairwise comparisons
+    df["group"] = list(zip(df[x], df[hue]))
+
+    # Default: all unique pairs
+    if pairs is None:
+        unique_groups = df["group"].unique()
+        pairs = list(itertools.combinations(unique_groups, 2))
+
+    # Compute tests for each pair
+    results = []
+    for g1, g2 in pairs:
+        vals1 = df.loc[df["group"] == g1, y]
+        vals2 = df.loc[df["group"] == g2, y]
+
+        if test == "welch":
+            stat, pval = ttest_ind(vals1, vals2, equal_var=False)
+        elif test == "mannwhitney":
+            stat, pval = mannwhitneyu(vals1, vals2, alternative="two-sided")
+        else:
+            raise ValueError("test must be 'welch' or 'mannwhitney'")
+
+        results.append({"group1": g1, "group2": g2, "stat": stat, "pval": pval})
+
+    results_df = pd.DataFrame(results)
+
+    # Plot
+    plt.figure(figsize=(8,6))
+    ax = sns.boxplot(data=df, x=x, y=y, hue=hue, showfliers=False)
+    sns.stripplot(data=df, x=x, y=y, hue=hue,
+                  dodge=True, jitter=True, color="k", alpha=0.6)
+
+    # Remove duplicate legends from stripplot
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles[:len(df[hue].unique())], labels[:len(df[hue].unique())])
+
+    # Annotate
+    annot_pairs = [((g1[0], g1[1]), (g2[0], g2[1])) for g1, g2 in pairs]
+    pvals = [r["pval"] for r in results]
+
+    annotator = Annotator(ax, pairs=annot_pairs, data=df, x=x, y=y, hue=hue)
+    annotator.configure(test=None, text_format="star", loc="outside")
+    annotator.set_pvalues(pvals)
+    annotator.annotate()
+
+    plt.title(title + f" ({test})")
+    plt.tight_layout()
+    plt.show()
+
+    return results_df
