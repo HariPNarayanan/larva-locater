@@ -1,58 +1,91 @@
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm  # For logarithmic normalization
 
-def plot_trajectory_heatmaps(dataframe, condition, frame_bin_size=100, grid_size=1):
+def plot_trajectory_heatmaps(
+    dataframe,
+    condition,
+    frame_bin_size=100,
+    grid_size=1,
+    title_size=18,
+    label_size=14,
+    tick_size=12,
+    cbar_size=14
+):
     """
     Plots heatmaps of the trajectory data based on density in 1x1 cm bins for each frame bin.
+
     Parameters:
         dataframe (pd.DataFrame): The input dataframe containing trajectory data.
         condition (str): The condition to filter the dataframe on.
         frame_bin_size (int): Number of frames per bin (default 100).
         grid_size (int): Size of the grid in cm (default 1x1 cm).
+        title_size (int): Font size for titles.
+        label_size (int): Font size for axis labels.
+        tick_size (int): Font size for tick labels.
+        cbar_size (int): Font size for colorbar labels.
     """
     # Filter dataframe by condition
     df = dataframe[dataframe['Condition'] == condition]
+
     # Determine the frame range for each bin
     min_frame = df['Frame'].min()
     max_frame = df['Frame'].max()
     frame_bins = np.arange(min_frame, max_frame + frame_bin_size, frame_bin_size)
+
     # Create a subplot for each frame bin
     num_bins = len(frame_bins) - 1
-    fig, axes = plt.subplots(1, num_bins, figsize=(15, 7), sharey=True)
-    if num_bins == 1:  # Handle case where only one frame bin exists
+    fig, axes = plt.subplots(1, num_bins, figsize=(5 * num_bins, 7), sharey=True)
+    if num_bins == 1:
         axes = [axes]
+
     # Loop through each frame bin
     for i in range(num_bins):
         bin_start, bin_end = frame_bins[i], frame_bins[i + 1]
-        # Filter data for the current frame bin
         df_bin = df[(df['Frame'] >= bin_start) & (df['Frame'] < bin_end)]
-        # Define grid for 1x1 cm bins (you can adjust based on the scale of your data)
+
+        # Define grid for histogram
         x_min, x_max = df_bin['X'].min(), df_bin['X'].max()
         y_min, y_max = df_bin['Y'].min(), df_bin['Y'].max()
-        # Create a 2D histogram of point density (counts in each 1x1 cm bin)
-        hist, xedges, yedges = np.histogram2d(df_bin['X'], df_bin['Y'],
-                                               bins=[np.arange(x_min, x_max + grid_size, grid_size),
-                                                     np.arange(y_min, y_max + grid_size, grid_size)])
+        hist, xedges, yedges = np.histogram2d(
+            df_bin['X'], df_bin['Y'],
+            bins=[np.arange(x_min, x_max + grid_size, grid_size),
+                  np.arange(y_min, y_max + grid_size, grid_size)]
+        )
+
         # Plot heatmap
-        cax = axes[i].pcolormesh(xedges, yedges, hist.T, cmap='viridis', shading='auto', norm=LogNorm(vmin=1))
-        # Set the title, labels, and grid
-        axes[i].set_title(f"Frames {bin_start}-{bin_end}")
-        axes[i].set_xlabel("X-coordinate (cm)")
-        if i == 0:  # Only label the y-axis on the first plot
-            axes[i].set_ylabel("Y-coordinate (cm)")
+        cax = axes[i].pcolormesh(
+            xedges, yedges, hist.T,
+            cmap='viridis', shading='auto', norm=LogNorm(vmin=1)
+        )
+
+        # Titles and labels
+        axes[i].set_title(f"Frames {bin_start}-{bin_end}", fontsize=title_size)
+        axes[i].set_xlabel("X-coordinate (cm)", fontsize=label_size)
+        if i == 0:
+            axes[i].set_ylabel("Y-coordinate (cm)", fontsize=label_size)
+
+        # Ticks
+        axes[i].tick_params(axis='both', which='major', labelsize=tick_size)
+
+        # Grid and aspect
         axes[i].grid(True)
-        # Ensure the aspect ratio is equal to prevent distortion
         axes[i].set_aspect('equal')
-        # Set limits for x and y to fix them at 30cm x 30cm
-        axes[i].set_xlim([0, 30])  # Set x limit to 30cm
-        axes[i].set_ylim([0, 30])  # Set y limit to 30cm
-    # Add a colorbar to the figure, and position it to the right
-    cbar = fig.colorbar(cax, ax=axes, orientation='vertical', label='Density (log scale)', fraction=0.02, pad=0.04)
-    # Add overall title
-    fig.suptitle(f"Heatmaps of Trajectories for Condition: {condition}", fontsize=16)
-    # Adjust layout to prevent overlap while keeping the colorbar in place
+        axes[i].set_xlim([0, 30])
+        axes[i].set_ylim([0, 30])
+
+    # Colorbar
+    cbar = fig.colorbar(
+        cax, ax=axes, orientation='vertical',
+        label='Density (log scale)', fraction=0.02, pad=0.04
+    )
+    cbar.ax.tick_params(labelsize=tick_size)
+    cbar.set_label('Density (log scale)', fontsize=cbar_size)
+
+    # Overall title
+    fig.suptitle(f"Heatmaps of Trajectories for Condition: {condition}", fontsize=title_size + 4)
+
+    # Layout
     plt.subplots_adjust(right=0.85, top=0.85)
-    # Show the plot
     plt.show()
 
 import numpy as np
@@ -75,7 +108,7 @@ def quantify_trajectory_zone_proportions(dataframe):
 
     # Initialize storage
     zone_counts = []
-
+ 
     # Process each condition and trial
     for condition in dataframe['Condition'].unique():
         df_condition = dataframe[dataframe['Condition'] == condition]
@@ -161,7 +194,6 @@ def plot_zone_1_over_time(dataframe, y_range=None):
         x='Frame', y='Proportion', hue='Condition', data=df_frames,
         estimator='mean', palette='pastel', lw=2
     )
-
     plt.ylabel("Mean Proportion in Zone 1")
     plt.xlabel("Frame")
     plt.title("Mean Proportion of Points in Zone 1 Over Time")
@@ -290,7 +322,15 @@ def plot_hued_scatter(df, max_legend_items=10):
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-def plot_distance_by_condition(df, frame_column='Frame', distance_column='Distance', condition_column='Condition', bin_size=100, num_bins_to_display=4):
+def plot_distance_by_condition(
+    df,
+    frame_column='Frame',
+    distance_column='Distance',
+    condition_column='Condition',
+    bin_size=100,
+    num_bins_to_display=4,
+    condition_colors=None  # <--- NEW
+):
     """
     Plots boxplots of 'Distance' binned by 'Frame' intervals, comparing different conditions.
     Displays only the middle 'num_bins_to_display' bins.
@@ -302,6 +342,10 @@ def plot_distance_by_condition(df, frame_column='Frame', distance_column='Distan
         condition_column (str): The column name representing the condition for comparison.
         bin_size (int): The number of frames to group together in each bin for boxplots.
         num_bins_to_display (int): The number of middle bins to display (e.g., 3 for the middle 3 bins).
+        condition_colors (dict or list or None): Custom colors for conditions.
+            - dict: {condition_name: color}
+            - list: [color1, color2, ...] in the same order as unique conditions
+            - None: defaults to a Viridis palette
     """
     # Ensure the necessary columns exist
     if not {frame_column, distance_column, condition_column}.issubset(df.columns):
@@ -322,13 +366,31 @@ def plot_distance_by_condition(df, frame_column='Frame', distance_column='Distan
     middle_bins = unique_bins[middle_start_index:middle_end_index]
     df_filtered = df[df['Bin'].isin(middle_bins)]
     
-    # Get unique conditions and generate Viridis colors
-    unique_conditions = df_filtered[condition_column].nunique()
-    viridis_palette = sns.color_palette("viridis", unique_conditions)
+    # Get unique conditions
+    unique_conditions = df_filtered[condition_column].unique()
+    
+    # Handle colors
+    if condition_colors is not None:
+        if isinstance(condition_colors, dict):
+            palette = {cond: condition_colors[cond] for cond in unique_conditions}
+        elif isinstance(condition_colors, list):
+            if len(condition_colors) < len(unique_conditions):
+                raise ValueError("Not enough colors in list for all conditions.")
+            palette = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
+        else:
+            raise ValueError("condition_colors must be a dict, list, or None")
+    else:
+        palette = sns.color_palette("viridis", len(unique_conditions))
 
     # Plotting the boxplots for Distance within the filtered bins and grouped by Condition
     plt.figure(figsize=(12, 6))
-    sns.boxplot(data=df_filtered, x='Bin', y=distance_column, hue=condition_column, palette=viridis_palette)
+    sns.boxplot(
+        data=df_filtered,
+        x='Bin',
+        y=distance_column,
+        hue=condition_column,
+        palette=palette
+    )
     
     plt.title(f'Boxplots of Distance binned by Frame intervals (Middle {num_bins_to_display} bins) and grouped by Condition')
     plt.xlabel('Frame Interval')
@@ -489,7 +551,7 @@ import seaborn as sns
 import pandas as pd
 import numpy as np
 
-def plot_zone_means_subplot(df, filter_column='Concentration', filter_values=None, titles=["Early", "Mid", "Late"]):
+def plot_zone_means_subplot(df, filter_column='Concentration', filter_values=None, titles=["Early", "Mid", "Late"], condition_colors=None):
     """
     Creates a subplot panel of mean zone proportions for different time points and a chosen filter column.
     
@@ -521,6 +583,7 @@ def plot_zone_means_subplot(df, filter_column='Concentration', filter_values=Non
     if num_cols == 1:
         axes = np.expand_dims(axes, axis=1)
 
+    # Default palettes (used only if condition_colors not provided)
     red_shades = sns.color_palette("Reds", 3)
     blue_shades = sns.color_palette("Blues", 3)
 
@@ -559,26 +622,39 @@ def plot_zone_means_subplot(df, filter_column='Concentration', filter_values=Non
 
             df_means = pd.DataFrame(zone_means)
 
-            color_mapping = {}
-            red_idx, blue_idx = 0, 0
-
-            # Updated color assignment: flip red and blue use
-            for condition in df_means['Condition'].unique():
-                starvation_status = df_means[df_means['Condition'] == condition]['Starvation'].iloc[0]
-
-                # Flip here: '5h' now gets blue, others get red
-                if starvation_status == '5h':
-                    color_mapping[condition] = blue_shades[blue_idx]
-                    blue_idx = (blue_idx + 1) % len(blue_shades)
+            # Handle colors
+            if condition_colors is not None:
+                if isinstance(condition_colors, dict):
+                    color_mapping = {cond: condition_colors[cond] for cond in df_means['Condition'].unique()}
+                elif isinstance(condition_colors, list):
+                    unique_conditions = df_means['Condition'].unique()
+                    color_mapping = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
                 else:
-                    color_mapping[condition] = red_shades[red_idx]
-                    red_idx = (red_idx + 1) % len(red_shades)
+                    raise ValueError("condition_colors must be a dict, list, or None")
+            else:
+                # Fallback: old red/blue logic
+                color_mapping = {}
+                red_idx, blue_idx = 0, 0
+                for condition in df_means['Condition'].unique():
+                    starvation_status = df_means[df_means['Condition'] == condition]['Starvation'].iloc[0]
+                    if starvation_status == '5h':
+                        color_mapping[condition] = blue_shades[blue_idx]
+                        blue_idx = (blue_idx + 1) % len(blue_shades)
+                    else:
+                        color_mapping[condition] = red_shades[red_idx]
+                        red_idx = (red_idx + 1) % len(red_shades)
 
+            # Plot
             for condition in df_means['Condition'].unique():
                 df_cond = df_means[df_means['Condition'] == condition]
-
-                ax.plot(df_cond['Zone'], df_cond['Mean Proportion'], marker='o', markersize=6,
-                        linestyle='-', linewidth=4, color=color_mapping[condition], label=condition)
+                ax.plot(
+                    df_cond['Zone'],
+                    df_cond['Mean Proportion'],
+                    marker='o', markersize=6,
+                    linestyle='-', linewidth=4,
+                    color=color_mapping[condition],
+                    label=condition
+                )
 
             ax.set_ylim(0, 1)
             if row_idx == 0:
@@ -996,18 +1072,25 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-def plot_preference_index_over_time(dataframe):
+def plot_preference_index_over_time(
+    dataframe,
+    condition_colors=None
+):
     """
     Plots the mean Preference Index over time for each condition.
     Preference Index = (Zone 1 - Zone 3) / (Zone 1 + Zone 2 + Zone 3)
 
     Parameters:
         dataframe (pd.DataFrame): Input DataFrame with columns ['Y', 'Frame', 'Trial', 'Condition']
+        condition_colors (dict, list, or None): 
+            - dict: {"ConditionA": "#FF0000", "ConditionB": "#0000FF"}
+            - list: ["#FF0000", "#0000FF", "#00FF00"] assigned in order of unique conditions
+            - None: use default red/blue scheme
     """
     # Define Y boundaries for 3 horizontal zones
     y_min, y_max = dataframe['Y'].min(), dataframe['Y'].max()
     y_range = (y_max - y_min) / 3
-    zone_bounds = [y_min, y_min + y_range, y_min + 2 * y_range, y_max]  # [Z1_low, Z2_low, Z3_low, y_max]
+    zone_bounds = [y_min, y_min + y_range, y_min + 2 * y_range, y_max]
 
     frame_data = []
 
@@ -1043,6 +1126,26 @@ def plot_preference_index_over_time(dataframe):
 
     df_frames = pd.DataFrame(frame_data)
 
+    # Handle colors
+    unique_conditions = df_frames['Condition'].unique()
+    if isinstance(condition_colors, dict):
+        palette = condition_colors
+    elif isinstance(condition_colors, list):
+        palette = dict(zip(unique_conditions, condition_colors))
+    else:
+        # Default: fallback red/blue scheme
+        red_shades = sns.color_palette("Reds", 3).as_hex()
+        blue_shades = sns.color_palette("Blues", 3).as_hex()
+        palette = {}
+        red_idx, blue_idx = 0, 0
+        for cond in unique_conditions:
+            if "5h" in cond:
+                palette[cond] = blue_shades[blue_idx % len(blue_shades)]
+                blue_idx += 1
+            else:
+                palette[cond] = red_shades[red_idx % len(red_shades)]
+                red_idx += 1
+
     # Plot: mean PI over time with confidence intervals per condition
     plt.figure(figsize=(12, 6))
     sns.lineplot(
@@ -1052,7 +1155,7 @@ def plot_preference_index_over_time(dataframe):
         hue='Condition',
         estimator='mean',
         ci='sd',
-        palette='muted',
+        palette=palette,
         lw=2
     )
 
@@ -1060,6 +1163,7 @@ def plot_preference_index_over_time(dataframe):
     plt.ylabel("Preference Index (Z1 - Z3)")
     plt.xlabel("Frame")
     plt.title("Mean Preference Index Over Time")
+    plt.ylim(-1, 1)  # Hard limit
     plt.legend(title="Condition")
     plt.tight_layout()
     plt.show()
@@ -1120,7 +1224,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-def plot_preference_index_boxplots(dataframe, bin_size=100):
+def plot_preference_index_boxplots(dataframe, bin_size=100, condition_colors=None):
     """
     Plots boxplots of the Preference Index binned by frame ranges for each condition.
 
@@ -1129,6 +1233,10 @@ def plot_preference_index_boxplots(dataframe, bin_size=100):
     Parameters:
         dataframe (pd.DataFrame): Input DataFrame with columns ['Y', 'Frame', 'Trial', 'Condition']
         bin_size (int): Number of frames per bin (default 100)
+        condition_colors (dict or list or None): Custom colors for conditions.
+            - dict: {condition_name: color}
+            - list: [color1, color2, ...] in the same order as unique conditions
+            - None: defaults to seaborn 'muted' palette
     """
     # Define Y boundaries for 3 horizontal zones
     y_min, y_max = dataframe['Y'].min(), dataframe['Y'].max()
@@ -1163,7 +1271,6 @@ def plot_preference_index_boxplots(dataframe, bin_size=100):
                 bin_end = bin_start + bin_size - 1
                 bin_label = f"{bin_start}-{bin_end}"
 
-
                 frame_data.append({
                     'Condition': condition,
                     'Trial': trial,
@@ -1173,28 +1280,39 @@ def plot_preference_index_boxplots(dataframe, bin_size=100):
 
     df_bins = pd.DataFrame(frame_data)
 
-    # Ensure frame bins are ordered correctly
-    df_bins['FrameBin'] = pd.Categorical(df_bins['FrameBin'], ordered=True,
-                                         categories=sorted(df_bins['FrameBin'].unique(),
-                                                           key=lambda x: int(x.split('-')[0])))
+    # Handle colors
+    unique_conditions = df_bins['Condition'].unique()
+    if condition_colors is not None:
+        if isinstance(condition_colors, dict):
+            palette = {cond: condition_colors[cond] for cond in unique_conditions}
+        elif isinstance(condition_colors, list):
+            if len(condition_colors) < len(unique_conditions):
+                raise ValueError("Not enough colors in list for all conditions.")
+            palette = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
+        else:
+            raise ValueError("condition_colors must be a dict, list, or None")
+    else:
+        palette = sns.color_palette("muted", len(unique_conditions))
 
-    plt.figure(figsize=(14, 6))
+    # Plot
+    plt.figure(figsize=(12, 6))
     sns.boxplot(
         data=df_bins,
         x='FrameBin',
         y='PreferenceIndex',
         hue='Condition',
-        palette='muted'
+        palette=palette
     )
 
     plt.axhline(0, color='gray', linestyle='--', lw=1)
     plt.ylabel("Preference Index (Z1 - Z3)")
-    plt.xlabel("Frame Bins")
-    plt.title("Preference Index Distribution in Binned Frames")
+    plt.xlabel("Frame Bin")
+    plt.title("Preference Index by Frame Bin and Condition")
     plt.legend(title="Condition", bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.show()
+
 
 def plot_zone_means_subplot_default(df, filter_column='Concentration', filter_values=None, titles=["Early", "Mid", "Late"]):
     """
@@ -1368,7 +1486,8 @@ def analyze_and_plot_target_acquisition(
     individual_col='Individual',
     x_col='X',
     y_col='Y',
-    condition_col='Condition'
+    condition_col='Condition',
+    condition_colors=None  # <--- NEW
 ):
     df = df.copy()
     
@@ -1396,13 +1515,40 @@ def analyze_and_plot_target_acquisition(
     conditions = df[[individual_col, condition_col]].drop_duplicates()
     time_to_target = time_to_target.merge(conditions, on=individual_col, how='left')
 
-    # Alphabetical order of conditions
+    # Condition order
     condition_order = sorted(time_to_target[condition_col].dropna().unique())
+
+    # Handle colors
+    if condition_colors is not None:
+        if isinstance(condition_colors, dict):
+            palette = {cond: condition_colors[cond] for cond in condition_order}
+        elif isinstance(condition_colors, list):
+            if len(condition_colors) < len(condition_order):
+                raise ValueError("Not enough colors in list for all conditions.")
+            palette = {cond: color for cond, color in zip(condition_order, condition_colors)}
+        else:
+            raise ValueError("condition_colors must be a dict, list, or None")
+    else:
+        palette = sns.color_palette("muted", len(condition_order))
+        palette = {cond: color for cond, color in zip(condition_order, palette)}
 
     # Plot 1: Time to target
     plt.figure(figsize=(10, 6))
-    sns.boxplot(data=time_to_target, x=condition_col, y='TimeToTarget', order=condition_order)
-    sns.stripplot(data=time_to_target, x=condition_col, y='TimeToTarget', color='black', alpha=0.5, order=condition_order)
+    sns.boxplot(
+        data=time_to_target,
+        x=condition_col,
+        y='TimeToTarget',
+        order=condition_order,
+        palette=palette
+    )
+    sns.stripplot(
+        data=time_to_target,
+        x=condition_col,
+        y='TimeToTarget',
+        color='black',
+        alpha=0.5,
+        order=condition_order
+    )
     plt.title('Time to Reach Target by Condition')
     plt.ylabel('Time to Target (frames)')
     plt.xlabel('Condition')
@@ -1423,7 +1569,13 @@ def analyze_and_plot_target_acquisition(
     plot_df = plot_df.sort_values(condition_col)
 
     plt.figure(figsize=(8, 5))
-    sns.barplot(data=plot_df, x=condition_col, y='SuccessRate', palette='viridis', order=condition_order)
+    sns.barplot(
+        data=plot_df,
+        x=condition_col,
+        y='SuccessRate',
+        palette=palette,
+        order=condition_order
+    )
     plt.ylim(0, 1)
     plt.ylabel('Success Rate')
     plt.xlabel('Condition')
@@ -1435,7 +1587,7 @@ def analyze_and_plot_target_acquisition(
 
     # Plot 3: Success rate over time
     reached_with_condition = reached[[individual_col, 'TargetFrame', condition_col]].copy()
-    
+     
     # Get all unique individuals per condition
     total_inds_per_condition = time_to_target.groupby(condition_col)[individual_col].nunique().to_dict()
     
@@ -1443,7 +1595,6 @@ def analyze_and_plot_target_acquisition(
     frame_range = np.sort(df[frame_col].unique())
 
     cumulative_success = []
-
     for condition in condition_order:
         subset = reached_with_condition[reached_with_condition[condition_col] == condition]
         for frame in frame_range:
@@ -1458,7 +1609,15 @@ def analyze_and_plot_target_acquisition(
     cumulative_df = pd.DataFrame(cumulative_success)
 
     plt.figure(figsize=(10, 6))
-    sns.lineplot(data=cumulative_df, x='Frame', y='SuccessRate', hue='Condition', hue_order=condition_order)
+    sns.lineplot(
+        data=cumulative_df,
+        x='Frame',
+        y='SuccessRate',
+        hue='Condition',
+        hue_order=condition_order,
+        palette=palette,
+        lw=2
+    )
     plt.title('Success Rate Over Time')
     plt.ylabel('Cumulative Success Rate')
     plt.xlabel('Frame')
@@ -1894,7 +2053,7 @@ def radial_sholl_heatmap_per_bin_normalized(
     y_col='Y',
     max_radius=10,
     condition_col='Condition',
-    spatial_bin=1  # New parameter
+    spatial_bin=1
 ):
     df = df.copy()
 
@@ -1939,6 +2098,10 @@ def radial_sholl_heatmap_per_bin_normalized(
     # Plot
     fig, ax = plt.subplots(figsize=(9, 9), subplot_kw={'projection': 'polar'})
 
+    # --- Rotation and direction ---
+    ax.set_theta_offset(np.pi / 4)   # start from 1 o’clock 
+    ax.set_theta_direction(-1)       # clockwise
+
     for i, fb in enumerate(frame_bins):
         for r in range(max_radius + 1):
             val = grouped.loc[
@@ -1959,10 +2122,15 @@ def radial_sholl_heatmap_per_bin_normalized(
     # Clean up
     ax.grid(False)
     ax.set_frame_on(False)
-    ax.set_yticks([r * spatial_bin for r in range(max_radius + 1)])
-    ax.set_yticklabels([f"{r * spatial_bin} units" for r in range(max_radius + 1)], fontsize=10)
+
+    # --- Remove ring distance labels (keep ticks invisible) ---
+    ax.set_yticks([])
+    ax.set_yticklabels([])
+
+    # Keep frame bin labels
     ax.set_xticks(theta)
     ax.set_xticklabels([str(fb) for fb in frame_bins], fontsize=9, rotation=90)
+
     ax.set_title(f'Radial Sholl (Per-Bin Normalized) – Condition: {condition_name}', va='bottom', fontsize=14)
 
     # Add colorbar
