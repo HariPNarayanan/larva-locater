@@ -132,3 +132,9 @@ def plot_odor_attraction_rose(df, odor=(15.,25.), frame_range=None, bins=36,
     plt.tight_layout()
     summary_df = pd.DataFrame(summary)
     return fig, summary_df
+
+# Implement function that integrates distance-to-odour information and mean velocity towards odour - would be good to see if this is correlated, and at what frame regimes.
+
+# Also plot 'success' timing (target_acquisition) - related to the rose?
+
+# Bin by Distance to Odour instead of Frames to check for correlations between distance to odour and mean velocity to odour.
