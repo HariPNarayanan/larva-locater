@@ -62,26 +62,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
 def bootstrap_and_shuffle_framewise(
     df: pd.DataFrame,
     value_col: str,
@@ -90,16 +70,15 @@ def bootstrap_and_shuffle_framewise(
     trial_cols: list = ["Trial"],
     value: float = 14,
     width: float = 1.5,
-    n_iter: int = 12,
+    n_iter: int = 15,
     random_state: int = 42,
     plot: bool = True,
-    compute_stats: bool = False
+    compute_stats: bool = False,
+    smooth_window: int = 5   # rolling mean window for smoothing
 ) -> dict:
     """
     Bootstraps Singles and reshuffles Groups for each frame.
-    df should contain both 'Single' and 'Group' in collective_col.
-    Optionally plots the results and computes framewise p-values.
-    Error bars are now SEM for bootstrapped singles, reshuffled groups, and real groups.
+    Error bars displayed as shaded SEM regions (optionally smoothed).
     """
     rng = np.random.default_rng(random_state)
     df = df.copy()
@@ -156,7 +135,6 @@ def bootstrap_and_shuffle_framewise(
     }
 
     if compute_stats:
-        # Framewise p-values vs bootstrapped singles and reshuffled groups
         p_vals_singles = []
         p_vals_reshuffled = []
         for i in range(len(frames)):
@@ -164,11 +142,9 @@ def bootstrap_and_shuffle_framewise(
             rs = reshuffled_matrix[i]
             real = real_matrix[i]
 
-            # Two-sided bootstrap test against singles
             p_single = np.mean(np.abs(bs - bs.mean()) >= np.abs(real - bs.mean()))
             p_vals_singles.append(p_single)
 
-            # Two-sided test against reshuffled groups
             p_rs = np.mean(np.abs(rs - rs.mean()) >= np.abs(real - rs.mean()))
             p_vals_reshuffled.append(p_rs)
 
@@ -177,27 +153,40 @@ def bootstrap_and_shuffle_framewise(
 
     if plot:
         plt.figure(figsize=(10, 5))
-        
-        # Bootstrapped singles mean and SEM
+
+        # Bootstrapped singles mean ± SEM
         bs_mean = bootstrapped_matrix.mean(axis=1)
         bs_sem = bootstrapped_matrix.std(axis=1) / np.sqrt(n_iter)
-        plt.errorbar(frames, bs_mean, yerr=bs_sem, fmt='-o', color="blue", label="Bootstrapped Singles ± SEM")
-        
-        # # Reshuffled groups mean and SEM
-        # rs_mean = reshuffled_matrix.mean(axis=1)
-        # rs_sem = reshuffled_matrix.std(axis=1) / np.sqrt(n_iter)
-        # plt.errorbar(frames, rs_mean, yerr=rs_sem, fmt='-o', color="orange", label="Reshuffled Groups ± SEM")
-        
-        # Real groups mean and SEM
-        plt.errorbar(frames, real_matrix, yerr=real_sem, fmt='-o', color="red", label="Real Groups ± SEM")
 
-        # Add significance markers for p < 0.05 vs singles
+        # Reshuffled groups mean ± SEM
+        rs_mean = reshuffled_matrix.mean(axis=1)
+        rs_sem = reshuffled_matrix.std(axis=1) / np.sqrt(n_iter)
+
+        # Optionally smooth with rolling average
+        if smooth_window > 1:
+            bs_mean = pd.Series(bs_mean).rolling(smooth_window, center=True).mean()
+            bs_sem = pd.Series(bs_sem).rolling(smooth_window, center=True).mean()
+            rs_mean = pd.Series(rs_mean).rolling(smooth_window, center=True).mean()
+            rs_sem = pd.Series(rs_sem).rolling(smooth_window, center=True).mean()
+            real_matrix = pd.Series(real_matrix).rolling(smooth_window, center=True).mean()
+            real_sem = pd.Series(real_sem).rolling(smooth_window, center=True).mean()
+
+        # Plot bootstrapped singles
+        plt.plot(frames, bs_mean, color="#A9E308C8", label="Bootstrapped Singles")
+        plt.fill_between(frames, bs_mean-bs_sem, bs_mean+bs_sem, color="#A9E308C8", alpha=0.2)
+
+        # Plot real groups
+        plt.plot(frames, real_matrix, color="#1951DD", label="Real Groups")
+        plt.fill_between(frames, real_matrix-real_sem, real_matrix+real_sem, color="#1951DD", alpha=0.2)
+
+        # Add significance markers
         if compute_stats:
             for i, p in enumerate(result["p_values_vs_singles"]):
                 if p < 0.05:
-                    plt.text(frames[i], real_matrix[i] + real_sem[i] + 0.05, "*", ha="center", color="red", fontsize=14)
+                    plt.text(frames[i], real_matrix[i] + real_sem[i] + 0.05, "*", 
+                             ha="center", color="red", fontsize=12)
 
-        # Extract condition name(s) for title
+        # Title with condition info
         if "Condition" in df.columns:
             conditions = df["Condition"].unique()
             if len(conditions) == 1:
@@ -207,11 +196,119 @@ def bootstrap_and_shuffle_framewise(
             plt.title(f"Framewise PI: Singles vs Groups (Condition: {condition_str})")
         else:
             plt.title("Framewise PI: Singles vs Groups")
-
+        plt.ylim(-1,1)
         plt.xlabel("Frame")
-        plt.ylabel("Proximity Index (PI)")
+        plt.ylabel("Preference Index (PI)")
         plt.legend()
         plt.tight_layout()
         plt.show()
 
     return result
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.stats import ttest_ind
+
+def compare_bootstrap_metrics(
+    df1: pd.DataFrame,
+    df2: pd.DataFrame,
+    value_col: str,
+    frame_col: str = "Frame",
+    collective_col: str = "Collective",
+    trial_cols: list = ["Trial"],
+    value: float = 14,
+    width: float = 1.5,
+    n_iter: int = 15,
+    random_state: int = 42,
+    smooth_window: int = 5,
+    plot: bool = True,
+    compute_stats: bool = True,
+    labels: tuple = ("Dataset 1", "Dataset 2")
+) -> dict:
+    """
+    Compare framewise group PI metrics between two datasets that share the same Conditions.
+    Uses the bootstrap_and_shuffle_framewise function internally.
+    Returns a dictionary with per-frame results and optionally plots comparisons.
+    """
+
+    # Run the framewise analysis on both datasets
+    res1 = bootstrap_and_shuffle_framewise(
+        df1, value_col=value_col, frame_col=frame_col,
+        collective_col=collective_col, trial_cols=trial_cols,
+        value=value, width=width, n_iter=n_iter,
+        random_state=random_state, plot=False
+    )
+    res2 = bootstrap_and_shuffle_framewise(
+        df2, value_col=value_col, frame_col=frame_col,
+        collective_col=collective_col, trial_cols=trial_cols,
+        value=value, width=width, n_iter=n_iter,
+        random_state=random_state, plot=False
+    )
+
+    frames = np.intersect1d(res1["frames"], res2["frames"])
+
+    g1 = pd.Series(res1["group_PI"], index=res1["frames"]).reindex(frames).values
+    g2 = pd.Series(res2["group_PI"], index=res2["frames"]).reindex(frames).values
+
+    sem1 = pd.Series(res1["group_PI_SEM"], index=res1["frames"]).reindex(frames).values
+    sem2 = pd.Series(res2["group_PI_SEM"], index=res2["frames"]).reindex(frames).values
+
+    if smooth_window > 1:
+        g1 = pd.Series(g1).rolling(smooth_window, center=True).mean().values
+        sem1 = pd.Series(sem1).rolling(smooth_window, center=True).mean().values
+        g2 = pd.Series(g2).rolling(smooth_window, center=True).mean().values
+        sem2 = pd.Series(sem2).rolling(smooth_window, center=True).mean().values
+
+    results = {
+        "frames": frames,
+        "dataset1_mean": g1,
+        "dataset2_mean": g2,
+        "dataset1_sem": sem1,
+        "dataset2_sem": sem2
+    }
+
+    # Compute statistical comparisons per frame
+    if compute_stats:
+        p_vals = []
+        for i, f in enumerate(frames):
+            # Extract bootstrapped distributions for each frame
+            bs1 = res1["bootstrapped_single_PIs"][i]
+            bs2 = res2["bootstrapped_single_PIs"][i]
+
+            # t-test (can easily replace with Mann–Whitney or permutation)
+            _, p = ttest_ind(bs1, bs2, equal_var=False, nan_policy="omit")
+            p_vals.append(p)
+        p_vals = np.array(p_vals)
+        results["p_values"] = p_vals
+
+    # Plot results
+    if plot:
+        plt.figure(figsize=(10, 5))
+        plt.plot(frames, g1, label=f"{labels[0]} Groups", color="#1951DD")
+        plt.fill_between(frames, g1 - sem1, g1 + sem1, color="#1951DD", alpha=0.2)
+
+        plt.plot(frames, g2, label=f"{labels[1]} Groups", color="#E36414")
+        plt.fill_between(frames, g2 - sem2, g2 + sem2, color="#E36414", alpha=0.2)
+
+        if compute_stats:
+            for i, p in enumerate(p_vals):
+                if p < 0.05:
+                    plt.text(frames[i], max(g1[i], g2[i]) + 0.05, "*", 
+                             ha="center", color="red", fontsize=12)
+
+        if "Condition" in df1.columns:
+            conds = df1["Condition"].unique()
+            cond_str = ", ".join(map(str, conds))
+            plt.title(f"Comparison of Group PI Between Datasets (Condition: {cond_str})")
+        else:
+            plt.title("Comparison of Group PI Between Datasets")
+
+        plt.xlabel("Frame")
+        plt.ylabel("Group PI")
+        plt.ylim(-1, 1)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    return results

@@ -1154,7 +1154,7 @@ def plot_preference_index_over_time(
         y='PreferenceIndex',
         hue='Condition',
         estimator='mean',
-        ci='sd',
+        errorbar='se',
         palette=palette,
         lw=2
     )
@@ -2202,5 +2202,791 @@ def plot_group_means(df, value_col, factor_a, factor_b, min_val=None, max_val=No
     plt.title(f"Mean {value_col} by {factor_a} x {factor_b}")
     plt.xticks(rotation=45, ha='right')
     plt.grid(axis="y", linestyle="--", alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+def plot_zone_means_subplot_sem(df, filter_column='Concentration', filter_values=None,
+                               titles=["Early", "Mid", "Late"], condition_colors=None):
+    """
+    Creates a subplot panel of mean zone proportions for different time points and a chosen filter column,
+    with SEM (standard error of the mean) added as error bars.
+
+    Parameters:
+        df (DataFrame): The full dataset.
+        filter_column (str): Column to filter by for subplot columns (default = 'Concentration').
+        filter_values (list or None): List of unique values to use from filter_column. If None, auto-detected.
+        titles (list): Titles for each timepoint row (default = ['Early', 'Mid', 'Late']).
+        condition_colors (dict or list or None): Optional color mapping.
+    """
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # Create unique replicate column (Condition + Trial)
+    if 'Trial' in df.columns:
+        df = df.copy()
+        df['ReplicateID'] = df['Condition'].astype(str) + "_" + df['Trial'].astype(str)
+    else:
+        df['ReplicateID'] = df['Condition']  # fallback
+
+    if filter_values is None:
+        filter_values = sorted(df[filter_column].dropna().unique())
+
+    min_frame, max_frame = df['Frame'].min(), df['Frame'].max()
+    frame_third = (max_frame - min_frame) // 3
+
+    early_df = df[df['Frame'] <= min_frame + frame_third]
+    mid_df = df[(df['Frame'] > min_frame + frame_third) & (df['Frame'] <= min_frame + 2 * frame_third)]
+    late_df = df[df['Frame'] > min_frame + 2 * frame_third]
+
+    dataframes = [early_df, mid_df, late_df]
+
+    num_rows = len(dataframes)
+    num_cols = len(filter_values)
+
+    fig, axes = plt.subplots(num_rows, num_cols, figsize=(4 * num_cols, 4 * num_rows), sharey=True, sharex=True)
+
+    if num_rows == 1:
+        axes = np.expand_dims(axes, axis=0)
+    if num_cols == 1:
+        axes = np.expand_dims(axes, axis=1)
+
+    # Default palettes (used only if condition_colors not provided)
+    red_shades = sns.color_palette("Reds", 3)
+    blue_shades = sns.color_palette("Blues", 3)
+    red_shades = [(min(r, 1), min(g, 1), min(b, 1)) for r, g, b in red_shades]
+    blue_shades = [(min(r * 0.8, 1), min(g * 0.9, 1), min(b * 1.1, 1)) for r, g, b in blue_shades]
+
+    for row_idx, (df_time, title) in enumerate(zip(dataframes, titles)):
+        for col_idx, value in enumerate(filter_values):
+            ax = axes[row_idx][col_idx]
+            df_filtered = df_time[df_time[filter_column] == value]
+
+            if df_filtered.empty:
+                ax.set_visible(False)
+                continue
+
+            y_min, y_max = df_filtered['Y'].min(), df_filtered['Y'].max()
+            y_range = (y_max - y_min) / 3
+            y_bounds = [y_min + y_range, y_min + 2 * y_range]
+
+            zone_stats = []
+
+            for condition in df_filtered['Condition'].unique():
+                df_condition = df_filtered[df_filtered['Condition'] == condition]
+                starvation_status = df_condition['Starvation'].iloc[0]
+
+                grouped = df_condition.groupby('ReplicateID')
+                proportions = []
+                for rep, df_rep in grouped:
+                    p1 = np.mean(df_rep['Y'] < y_bounds[0])
+                    p2 = np.mean((df_rep['Y'] >= y_bounds[0]) & (df_rep['Y'] < y_bounds[1]))
+                    p3 = np.mean(df_rep['Y'] >= y_bounds[1])
+                    proportions.append([p1, p2, p3])
+                proportions = np.array(proportions)
+
+                means = proportions.mean(axis=0)
+                sems = proportions.std(axis=0, ddof=1) / np.sqrt(proportions.shape[0])
+
+                for zone, mean, sem in zip(['Zone 1', 'Zone 2', 'Zone 3'], means, sems):
+                    zone_stats.append({
+                        'Condition': condition,
+                        'Starvation': starvation_status,
+                        'Zone': zone,
+                        'Mean': mean,
+                        'SEM': sem
+                    })
+
+            df_stats = pd.DataFrame(zone_stats)
+
+            # Handle colors
+            if condition_colors is not None:
+                if isinstance(condition_colors, dict):
+                    color_mapping = {cond: condition_colors[cond] for cond in df_stats['Condition'].unique()}
+                elif isinstance(condition_colors, list):
+                    unique_conditions = df_stats['Condition'].unique()
+                    color_mapping = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
+                else:
+                    raise ValueError("condition_colors must be a dict, list, or None")
+            else:
+                color_mapping = {}
+                red_idx, blue_idx = 0, 0
+                for condition in df_stats['Condition'].unique():
+                    starvation_status = df_stats[df_stats['Condition'] == condition]['Starvation'].iloc[0]
+                    if starvation_status == '5h':
+                        color_mapping[condition] = blue_shades[blue_idx]
+                        blue_idx = (blue_idx + 1) % len(blue_shades)
+                    else:
+                        color_mapping[condition] = red_shades[red_idx]
+                        red_idx = (red_idx + 1) % len(red_shades)
+
+            # Plot with SEM
+            for condition in df_stats['Condition'].unique():
+                df_cond = df_stats[df_stats['Condition'] == condition]
+                ax.errorbar(
+                    df_cond['Zone'],
+                    df_cond['Mean'],
+                    yerr=df_cond['SEM'],
+                    marker='o', markersize=6,
+                    linestyle='-', linewidth=3,
+                    color=color_mapping[condition],
+                    capsize=5,
+                    label=condition
+                )
+
+            ax.set_ylim(0, 1)
+            if row_idx == 0:
+                ax.set_title(f"{filter_column}: {value}")
+                ax.legend(title="Condition", loc='upper right', fontsize=9, frameon=True)
+            if col_idx == 0:
+                ax.set_ylabel(f"{title}\nMean Proportion")
+            if row_idx == num_rows - 1:
+                ax.set_xlabel("Zone")
+
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_preference_index_comparison(df1, df2, bin_size=100, dataset_labels=("Dataset 1", "Dataset 2"), condition_colors=None):
+    """
+    Compare Preference Index distributions between two datasets across frame bins for each condition.
+
+    Preference Index = (Zone 1 - Zone 3) / (Zone 1 + Zone 2 + Zone 3)
+
+    Parameters:
+        df1, df2 (pd.DataFrame): Input DataFrames with columns ['Y', 'Frame', 'Trial', 'Condition']
+        bin_size (int): Number of frames per bin (default 100)
+        dataset_labels (tuple): Labels for the two datasets in the legend
+        condition_colors (dict or list or None): Optional color control for conditions
+    """
+
+    def compute_preference_index(df, dataset_label):
+        y_min, y_max = df['Y'].min(), df['Y'].max()
+        y_range = (y_max - y_min) / 3
+        zone_bounds = [y_min, y_min + y_range, y_min + 2 * y_range, y_max]
+
+        frame_data = []
+        for condition in df['Condition'].unique():
+            df_condition = df[df['Condition'] == condition]
+            for trial in df_condition['Trial'].unique():
+                df_trial = df_condition[df_condition['Trial'] == trial]
+
+                for frame in df_trial['Frame'].unique():
+                    df_frame = df_trial[df_trial['Frame'] == frame]
+                    if df_frame.empty:
+                        continue
+
+                    z1 = np.sum(df_frame['Y'] < zone_bounds[1])
+                    z2 = np.sum((df_frame['Y'] >= zone_bounds[1]) & (df_frame['Y'] < zone_bounds[2]))
+                    z3 = np.sum(df_frame['Y'] >= zone_bounds[2])
+                    total = z1 + z2 + z3
+
+                    if total == 0:
+                        continue
+
+                    pi = (z1 - z3) / total
+                    frame_int = int(frame)
+                    bin_start = (frame_int // bin_size) * bin_size
+                    bin_end = bin_start + bin_size - 1
+                    bin_label = f"{bin_start}-{bin_end}"
+
+                    frame_data.append({
+                        'Condition': condition,
+                        'Trial': trial,
+                        'FrameBin': bin_label,
+                        'PreferenceIndex': pi,
+                        'Dataset': dataset_label
+                    })
+
+        return pd.DataFrame(frame_data)
+
+    # Compute PI data for both datasets
+    df1_bins = compute_preference_index(df1, dataset_labels[0])
+    df2_bins = compute_preference_index(df2, dataset_labels[1])
+    df_combined = pd.concat([df1_bins, df2_bins], ignore_index=True)
+
+    # Color palette
+    unique_conditions = df_combined['Condition'].unique()
+    if condition_colors is not None:
+        if isinstance(condition_colors, dict):
+            palette = {cond: condition_colors[cond] for cond in unique_conditions}
+        elif isinstance(condition_colors, list):
+            if len(condition_colors) < len(unique_conditions):
+                raise ValueError("Not enough colors in list for all conditions.")
+            palette = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
+        else:
+            raise ValueError("condition_colors must be a dict, list, or None")
+    else:
+        palette = dict(zip(unique_conditions, sns.color_palette("muted", len(unique_conditions))))
+
+    # Plot setup
+    n_conditions = len(unique_conditions)
+    fig, axes = plt.subplots(n_conditions, 1, figsize=(12, 5 * n_conditions), sharex=True)
+
+    if n_conditions == 1:
+        axes = [axes]  # Ensure iterable if only one condition
+
+    for ax, condition in zip(axes, unique_conditions):
+        df_cond = df_combined[df_combined['Condition'] == condition]
+        sns.boxplot(
+            data=df_cond,
+            x='FrameBin',
+            y='PreferenceIndex',
+            hue='Dataset',
+            palette='Set2',
+            ax=ax
+        )
+        ax.axhline(0, color='gray', linestyle='--', lw=1)
+        ax.set_title(f"Condition: {condition}", fontsize=14)
+        ax.set_xlabel("Frame Bin")
+        ax.set_ylabel("Preference Index (Z1 - Z3)")
+        ax.legend(title="Dataset", bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.tick_params(axis='x', rotation=45)
+
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_distance_comparison(df1, df2, bin_size=100, dataset_labels=("Dataset 1", "Dataset 2"), condition_colors=None):
+    """
+    Compare Distance distributions between two datasets across frame bins for each condition.
+
+    Parameters:
+        df1, df2 (pd.DataFrame): Input DataFrames with columns ['Distance', 'Frame', 'Trial', 'Condition']
+        bin_size (int): Number of frames per bin (default 100)
+        dataset_labels (tuple): Labels for the two datasets in the legend
+        condition_colors (dict or list or None): Optional color control for conditions
+    """
+
+    def process_dataset(df, dataset_label):
+        frame_data = []
+
+        for condition in df['Condition'].unique():
+            df_condition = df[df['Condition'] == condition]
+            for trial in df_condition['Trial'].unique():
+                df_trial = df_condition[df_condition['Trial'] == trial]
+
+                for frame in df_trial['Frame'].unique():
+                    df_frame = df_trial[df_trial['Frame'] == frame]
+                    if df_frame.empty:
+                        continue
+
+                    # Average distance at this frame (or sum if that's more meaningful)
+                    dist_val = df_frame['Distance'].mean()
+
+                    frame_int = int(frame)
+                    bin_start = (frame_int // bin_size) * bin_size
+                    bin_end = bin_start + bin_size - 1
+                    bin_label = f"{bin_start}-{bin_end}"
+
+                    frame_data.append({
+                        'Condition': condition,
+                        'Trial': trial,
+                        'FrameBin': bin_label,
+                        'Distance': dist_val,
+                        'Dataset': dataset_label
+                    })
+
+        return pd.DataFrame(frame_data)
+
+    # Process both datasets
+    df1_bins = process_dataset(df1, dataset_labels[0])
+    df2_bins = process_dataset(df2, dataset_labels[1])
+    df_combined = pd.concat([df1_bins, df2_bins], ignore_index=True)
+
+    # Handle colors
+    unique_conditions = df_combined['Condition'].unique()
+    if condition_colors is not None:
+        if isinstance(condition_colors, dict):
+            palette = {cond: condition_colors[cond] for cond in unique_conditions}
+        elif isinstance(condition_colors, list):
+            if len(condition_colors) < len(unique_conditions):
+                raise ValueError("Not enough colors in list for all conditions.")
+            palette = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
+        else:
+            raise ValueError("condition_colors must be a dict, list, or None")
+    else:
+        palette = dict(zip(unique_conditions, sns.color_palette("muted", len(unique_conditions))))
+
+    # Plot setup
+    n_conditions = len(unique_conditions)
+    fig, axes = plt.subplots(n_conditions, 1, figsize=(12, 5 * n_conditions), sharex=True)
+
+    if n_conditions == 1:
+        axes = [axes]  # Make iterable
+
+    for ax, condition in zip(axes, unique_conditions):
+        df_cond = df_combined[df_combined['Condition'] == condition]
+        sns.boxplot(
+            data=df_cond,
+            x='FrameBin',
+            y='Distance',
+            hue='Dataset',
+            palette='Set2',
+            ax=ax
+        )
+        ax.set_title(f"Condition: {condition}", fontsize=14)
+        ax.set_xlabel("Frame Bin")
+        ax.set_ylabel("Distance")
+        ax.legend(title="Dataset", bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.tick_params(axis='x', rotation=45)
+
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_distance_comparison_collapsed_with_summary(
+    df1, df2,
+    bin_size=100,
+    dataset_labels=("Dataset 1", "Dataset 2"),
+    plot_type="both",  # 'box', 'strip', or 'both'
+    condition_colors=None,
+    show_summary=True
+):
+    """
+    Compare Distance distributions between two datasets across frame bins for each condition.
+    Each data point = mean Distance per individual (Trial) per bin.
+    Optionally overlays mean ± SEM summary lines per dataset, color-matched to the data.
+    """
+
+    def process_dataset(df, dataset_label):
+        df = df.copy()
+        # Ensure frames are integers before binning
+        df["Frame"] = df["Frame"].astype(int)
+        df["FrameBin"] = (df["Frame"] // bin_size) * bin_size
+        df["FrameBinLabel"] = df["FrameBin"].astype(str) + "-" + (df["FrameBin"] + bin_size - 1).astype(str)
+
+        # Collapse to one mean Distance per trial per bin
+        df_agg = (
+            df.groupby(["Condition", "Trial", "FrameBinLabel"], as_index=False)
+              .agg({"Distance": "mean"})
+        )
+        df_agg["Dataset"] = dataset_label
+        return df_agg
+
+    # Process both datasets
+    df1_bins = process_dataset(df1, dataset_labels[0])
+    df2_bins = process_dataset(df2, dataset_labels[1])
+    df_combined = pd.concat([df1_bins, df2_bins], ignore_index=True)
+
+    # Fix ordering of bins
+    def parse_start(x):
+        try:
+            return int(float(x.split("-")[0]))
+        except Exception:
+            return 0
+
+    df_combined["FrameBinLabel"] = pd.Categorical(
+        df_combined["FrameBinLabel"],
+        ordered=True,
+        categories=sorted(df_combined["FrameBinLabel"].unique(), key=parse_start)
+    )
+
+    # Color palettes
+    unique_conditions = df_combined["Condition"].unique()
+    palette = dict(zip(unique_conditions, sns.color_palette("muted", len(unique_conditions)))) \
+        if condition_colors is None else condition_colors
+
+    dataset_palette = dict(zip(dataset_labels, sns.color_palette("Set2", len(dataset_labels))))
+
+    # Plot setup
+    n_conditions = len(unique_conditions)
+    fig, axes = plt.subplots(n_conditions, 1, figsize=(12, 4.5 * n_conditions), sharex=True)
+    if n_conditions == 1:
+        axes = [axes]
+
+    for ax, condition in zip(axes, unique_conditions):
+        df_cond = df_combined[df_combined["Condition"] == condition]
+
+        # --- Boxplot ---
+        if plot_type in ("box", "both"):
+            sns.boxplot(
+                data=df_cond,
+                x="FrameBinLabel",
+                y="Distance",
+                hue="Dataset",
+                dodge=True,
+                palette=dataset_palette,
+                fliersize=0,
+                ax=ax,
+                width=0.6
+            )
+
+        # --- Stripplot ---
+        if plot_type in ("strip", "both"):
+            sns.stripplot(
+                data=df_cond,
+                x="FrameBinLabel",
+                y="Distance",
+                hue="Dataset",
+                dodge=True,
+                palette=dataset_palette,
+                size=5,
+                jitter=True,
+                alpha=0.6,
+                ax=ax
+            )
+
+        # Remove duplicate legends if both used
+        handles, labels = ax.get_legend_handles_labels()
+        if len(handles) > len(dataset_labels):
+            ax.legend_.remove()
+
+        # --- Summary lines (mean ± SEM) ---
+        if show_summary:
+            df_summary = (
+                df_cond.groupby(["Dataset", "FrameBinLabel"], as_index=False)
+                .agg(
+                    mean_distance=("Distance", "mean"),
+                    sem_distance=("Distance", lambda x: x.std(ddof=1) / np.sqrt(len(x)))
+                )
+            )
+
+            for dataset in df_summary["Dataset"].unique():
+                df_d = df_summary[df_summary["Dataset"] == dataset]
+                xvals = np.arange(len(df_d))
+                color = dataset_palette[dataset]
+
+                ax.plot(
+                    xvals,
+                    df_d["mean_distance"],
+                    marker="o",
+                    linestyle="-",
+                    linewidth=2,
+                    color=color,
+                    label=f"{dataset} mean"
+                )
+                ax.fill_between(
+                    xvals,
+                    df_d["mean_distance"] - df_d["sem_distance"],
+                    df_d["mean_distance"] + df_d["sem_distance"],
+                    color=color,
+                    alpha=0.2
+                )
+
+        # --- Labels & formatting ---
+        ax.set_title(f"Condition: {condition}", fontsize=14)
+        ax.set_xlabel("Frame Bin")
+        ax.set_ylabel("Mean Distance per Trial")
+        ax.tick_params(axis="x", rotation=45)
+        ax.set_xticks(np.arange(len(df_cond["FrameBinLabel"].unique())))
+        ax.set_xticklabels(df_cond["FrameBinLabel"].unique())
+        ax.legend(title="Dataset", bbox_to_anchor=(1.05, 1), loc="upper left")
+
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_distance_summary(
+    df,
+    bin_size=100,
+    plot_type="both",  # 'box', 'strip', or 'both'
+    condition_colors=None,
+    show_summary=True
+):
+    """
+    Visualize Distance distributions across frame bins for each condition in a single dataset.
+
+    Each data point = mean Distance per individual (Trial) per bin.
+    Optionally overlays mean ± SEM summary lines.
+
+    Parameters:
+        df (pd.DataFrame): Input DataFrame with ['Distance', 'Frame', 'Trial', 'Condition']
+        bin_size (int): Number of frames per bin (default 100)
+        plot_type (str): 'box', 'strip', or 'both'
+        condition_colors (dict/list/None): Optional color control for conditions
+        show_summary (bool): If True, overlay mean ± SEM per bin
+    """
+
+    df = df.copy()
+
+    # --- Preprocess ---
+    df["Frame"] = df["Frame"].astype(int)
+    df["FrameBin"] = (df["Frame"] // bin_size) * bin_size
+    df["FrameBinLabel"] = df["FrameBin"].astype(str) + "-" + (df["FrameBin"] + bin_size - 1).astype(str)
+
+    # Collapse to mean Distance per trial per bin
+    df_agg = (
+        df.groupby(["Condition", "Trial", "FrameBinLabel"], as_index=False)
+          .agg({"Distance": "mean"})
+    )
+
+    # Sort bins numerically
+    def parse_start(x):
+        try:
+            return int(float(x.split("-")[0]))
+        except Exception:
+            return 0
+
+    df_agg["FrameBinLabel"] = pd.Categorical(
+        df_agg["FrameBinLabel"],
+        ordered=True,
+        categories=sorted(df_agg["FrameBinLabel"].unique(), key=parse_start)
+    )
+
+    # --- Colors ---
+    unique_conditions = df_agg["Condition"].unique()
+    if condition_colors is not None:
+        if isinstance(condition_colors, dict):
+            palette = {cond: condition_colors[cond] for cond in unique_conditions}
+        elif isinstance(condition_colors, list):
+            if len(condition_colors) < len(unique_conditions):
+                raise ValueError("Not enough colors for all conditions.")
+            palette = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
+        else:
+            raise ValueError("condition_colors must be a dict, list, or None")
+    else:
+        palette = dict(zip(unique_conditions, sns.color_palette("muted", len(unique_conditions))))
+
+    # --- Plot setup ---
+    n_conditions = len(unique_conditions)
+    fig, axes = plt.subplots(n_conditions, 1, figsize=(12, 4.5 * n_conditions), sharex=True)
+    if n_conditions == 1:
+        axes = [axes]
+
+    for ax, condition in zip(axes, unique_conditions):
+        df_cond = df_agg[df_agg["Condition"] == condition]
+        color = palette[condition]
+
+        # --- Boxplot ---
+        if plot_type in ("box", "both"):
+            sns.boxplot(
+                data=df_cond,
+                x="FrameBinLabel",
+                y="Distance",
+                color=color,
+                fliersize=0,
+                width=0.6,
+                ax=ax
+            )
+
+        # --- Stripplot ---
+        if plot_type in ("strip", "both"):
+            sns.stripplot(
+                data=df_cond,
+                x="FrameBinLabel",
+                y="Distance",
+                color=color,
+                size=5,
+                jitter=True,
+                alpha=0.6,
+                ax=ax
+            )
+
+        # --- Summary line (mean ± SEM) ---
+        if show_summary:
+            df_summary = (
+                df_cond.groupby("FrameBinLabel", as_index=False)
+                .agg(
+                    mean_distance=("Distance", "mean"),
+                    sem_distance=("Distance", lambda x: x.std(ddof=1) / np.sqrt(len(x)))
+                )
+            )
+            xvals = np.arange(len(df_summary))
+            ax.plot(
+                xvals,
+                df_summary["mean_distance"],
+                color=color,
+                marker="o",
+                linestyle="-",
+                linewidth=2,
+                label=f"{condition} mean"
+            )
+            ax.fill_between(
+                xvals,
+                df_summary["mean_distance"] - df_summary["sem_distance"],
+                df_summary["mean_distance"] + df_summary["sem_distance"],
+                color=color,
+                alpha=0.2
+            )
+
+        # --- Labels & formatting ---
+        ax.set_title(f"Condition: {condition}", fontsize=14)
+        ax.set_xlabel("Frame Bin")
+        ax.set_ylabel("Mean Distance per Trial")
+        ax.tick_params(axis="x", rotation=45)
+        ax.set_xticks(np.arange(len(df_cond["FrameBinLabel"].unique())))
+        ax.set_xticklabels(df_cond["FrameBinLabel"].unique())
+        ax.legend(loc="upper left")
+
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_metric_summary(
+    df,
+    value_col="Distance",
+    bin_size=100,
+    plot_type="both",  # 'box', 'strip', or 'both'
+    condition_colors=None,
+    show_summary=True
+):
+    """
+    Visualize a metric (e.g. Distance, Speed, Preference Index) across frame bins for each condition.
+
+    Each data point = mean(value_col) per individual (Trial) per bin.
+    Optionally overlays mean ± SEM summary lines.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame with columns ['Frame', 'Trial', 'Condition', value_col]
+        value_col (str): Column name to analyze (e.g., 'Distance', 'Speed', 'PreferenceIndex')
+        bin_size (int): Number of frames per bin
+        plot_type (str): 'box', 'strip', or 'both'
+        condition_colors (dict/list/None): Optional color mapping for conditions
+        show_summary (bool): If True, overlay mean ± SEM per bin
+    """
+
+    # --- Copy and preprocess ---
+    df = df.copy()
+
+    if value_col not in df.columns:
+        raise ValueError(f"'{value_col}' not found in DataFrame columns: {list(df.columns)}")
+
+    # Ensure frame is int and create bins
+    df["Frame"] = df["Frame"].astype(int)
+    df["FrameBin"] = (df["Frame"] // bin_size) * bin_size
+    df["FrameBinLabel"] = df["FrameBin"].astype(str) + "-" + (df["FrameBin"] + bin_size - 1).astype(str)
+
+    # Collapse: mean per trial per bin
+    df_agg = (
+        df.groupby(["Condition", "Trial", "FrameBinLabel"], as_index=False)
+          .agg({value_col: "mean"})
+    )
+
+    # Sort bins numerically by start frame
+    def parse_start(x):
+        try:
+            return int(float(x.split("-")[0]))
+        except Exception:
+            return 0
+
+    df_agg["FrameBinLabel"] = pd.Categorical(
+        df_agg["FrameBinLabel"],
+        ordered=True,
+        categories=sorted(df_agg["FrameBinLabel"].unique(), key=parse_start)
+    )
+
+    # --- Colors ---
+    unique_conditions = df_agg["Condition"].unique()
+    if condition_colors is not None:
+        if isinstance(condition_colors, dict):
+            palette = {cond: condition_colors[cond] for cond in unique_conditions}
+        elif isinstance(condition_colors, list):
+            if len(condition_colors) < len(unique_conditions):
+                raise ValueError("Not enough colors in list for all conditions.")
+            palette = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
+        else:
+            raise ValueError("condition_colors must be a dict, list, or None")
+    else:
+        palette = dict(zip(unique_conditions, sns.color_palette("muted", len(unique_conditions))))
+
+    # --- Plot setup ---
+    n_conditions = len(unique_conditions)
+    fig, axes = plt.subplots(n_conditions, 1, figsize=(12, 4.5 * n_conditions), sharex=True)
+    if n_conditions == 1:
+        axes = [axes]
+
+    for ax, condition in zip(axes, unique_conditions):
+        df_cond = df_agg[df_agg["Condition"] == condition]
+        color = palette[condition]
+
+        # --- Boxplot ---
+        if plot_type in ("box", "both"):
+            sns.boxplot(
+                data=df_cond,
+                x="FrameBinLabel",
+                y=value_col,
+                color=color,
+                fliersize=0,
+                width=0.6,
+                ax=ax
+            )
+
+        # --- Stripplot ---
+        if plot_type in ("strip", "both"):
+            sns.stripplot(
+                data=df_cond,
+                x="FrameBinLabel",
+                y=value_col,
+                color=color,
+                size=5,
+                jitter=True,
+                alpha=0.6,
+                ax=ax
+            )
+
+        # --- Summary line (mean ± SEM) ---
+        if show_summary:
+            df_summary = (
+                df_cond.groupby("FrameBinLabel", as_index=False)
+                .agg(
+                    mean_value=(value_col, "mean"),
+                    sem_value=(value_col, lambda x: x.std(ddof=1) / np.sqrt(len(x)))
+                )
+            )
+            xvals = np.arange(len(df_summary))
+            ax.plot(
+                xvals,
+                df_summary["mean_value"],
+                color=color,
+                marker="o",
+                linestyle="-",
+                linewidth=2,
+                label=f"{condition} mean"
+            )
+            ax.fill_between(
+                xvals,
+                df_summary["mean_value"] - df_summary["sem_value"],
+                df_summary["mean_value"] + df_summary["sem_value"],
+                color=color,
+                alpha=0.2
+            )
+
+        # --- Labels & formatting ---
+        pretty_label = value_col.replace("_", " ").title()
+        ax.set_title(f"Condition: {condition}", fontsize=14)
+        ax.set_xlabel("Frame Bin")
+        ax.set_ylabel(f"Mean {pretty_label} per Trial")
+        ax.tick_params(axis="x", rotation=45)
+        ax.set_xticks(np.arange(len(df_cond["FrameBinLabel"].unique())))
+        ax.set_xticklabels(df_cond["FrameBinLabel"].unique())
+        ax.legend(loc="upper left")
+
     plt.tight_layout()
     plt.show()
