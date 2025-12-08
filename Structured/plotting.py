@@ -2990,3 +2990,140 @@ def plot_metric_summary(
 
     plt.tight_layout()
     plt.show()
+
+def plot_prefindex_and_successrate_combined(
+    dataframe,
+    bin_size=100,
+    target_x=14,
+    target_y=2,
+    radius=2,
+    assign_max_if_unreached=True,
+    frame_col='Frame',
+    individual_col='Individual',
+    x_col='X',
+    y_col='Y',
+    condition_col='Condition',
+    concentration_col='Concentration'
+):
+    """
+    Combines Preference Index and Success Rate plots, following the logic of the
+    original individual functions, but ensuring that for each concentration,
+    'Fed' and '5h' conditions appear adjacent in the plots.
+    """
+
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+
+    # -------------------------------------------------------------------------
+    # 1. Define color palettes for condition types
+    # -------------------------------------------------------------------------
+    fed_conditions = sorted(dataframe.loc[dataframe[condition_col].str.contains('Fed'), condition_col].unique())
+    fiveh_conditions = sorted(dataframe.loc[dataframe[condition_col].str.contains('5h'), condition_col].unique())
+    other_conditions = sorted(dataframe.loc[
+        ~dataframe[condition_col].str.contains('Fed|5h'), condition_col
+    ].unique())
+
+    fed_palette = list(reversed(sns.color_palette("Oranges", n_colors=max(3, len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Blues", n_colors=max(3, len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))))
+
+
+    condition_colors = {}
+    for c, color in zip(fed_conditions, fed_palette):
+        condition_colors[c] = color
+    for c, color in zip(fiveh_conditions, fiveh_palette):
+        condition_colors[c] = color
+    for c, color in zip(other_conditions, other_palette):
+        condition_colors[c] = color
+
+    # -------------------------------------------------------------------------
+    # 2. Determine condition order (Fed first, then 5h, grouped by concentration)
+    # -------------------------------------------------------------------------
+    ordered_conditions = []
+    unique_concs = sorted(dataframe[concentration_col].unique())
+
+    for conc in unique_concs:
+        conc_subset = dataframe[dataframe[concentration_col] == conc]
+        fed = sorted(conc_subset.loc[conc_subset[condition_col].str.contains('Fed'), condition_col].unique())
+        fiveh = sorted(conc_subset.loc[conc_subset[condition_col].str.contains('5h'), condition_col].unique())
+        others = sorted(conc_subset.loc[
+            ~conc_subset[condition_col].str.contains('Fed|5h'), condition_col
+        ].unique())
+
+        # Add in logical order: Fed → 5h → any others
+        ordered_conditions.extend(fed + fiveh + others)
+
+    # -------------------------------------------------------------------------
+    # 3. Compute success rate (same logic as before)
+    # -------------------------------------------------------------------------
+    success_df = []
+    for cond, subdf in dataframe.groupby(condition_col):
+        success_per_individual = []
+        for ind, df_ind in subdf.groupby(individual_col):
+            df_ind = df_ind.sort_values(by=frame_col)
+            success = np.sqrt((df_ind[x_col] - target_x)**2 + (df_ind[y_col] - target_y)**2) <= radius
+            if assign_max_if_unreached and not success.any():
+                success_per_individual.append(0)
+            else:
+                success_per_individual.append(success.any())
+        success_df.append({
+            'Condition': cond,
+            'Success Rate': np.mean(success_per_individual)
+        })
+    success_df = pd.DataFrame(success_df)
+
+    # -------------------------------------------------------------------------
+    # 4. Compute Preference Index (same logic as before)
+    # -------------------------------------------------------------------------
+    prefindex_df = []
+    for (cond, ind), subdf in dataframe.groupby([condition_col, individual_col]):
+        subdf = subdf.sort_values(by=frame_col)
+        subdf['Bin'] = (subdf[frame_col] // bin_size) * bin_size
+        grouped = subdf.groupby('Bin')[[x_col, y_col]].mean()
+        prefindex_df.append(pd.DataFrame({
+            'Frame Bin': grouped.index,
+            'Preference Index (Z1 - Z3)': -(grouped[y_col] - grouped[x_col]) / (abs(grouped[y_col]) + abs(grouped[x_col]) + 1e-9),
+            'Condition': cond
+        }))
+    prefindex_df = pd.concat(prefindex_df, ignore_index=True)
+
+    # -------------------------------------------------------------------------
+    # 5. Plot both panels
+    # -------------------------------------------------------------------------
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    sns.barplot(
+        data=success_df,
+        x='Condition',
+        y='Success Rate',
+        order=ordered_conditions,
+        palette=condition_colors,
+        ax=axes[0]
+    )
+    axes[0].set_title("Success Rate per Condition")
+    axes[0].set_xlabel("Condition")
+    axes[0].set_ylabel("Success Rate")
+    axes[0].set_ylim(0, 1)
+    axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=45, ha='right')
+
+    sns.pointplot(
+        data=prefindex_df,
+        x='Frame Bin',
+        y='Preference Index (Z1 - Z3)',
+        hue='Condition',
+        hue_order=ordered_conditions,
+        palette=condition_colors,
+        errorbar='se',          # Use SEM for error bars
+        dodge=True,        # Separate points by hue
+        markers='o',
+        capsize=0.1,
+        ax=axes[1]
+    )
+    axes[1].axhline(0, linestyle='--', color='gray', linewidth=1)
+    axes[1].set_title("Preference Index by Frame Bin and Condition")
+    axes[1].set_ylabel("Preference Index (Z1 - Z3)")
+    axes[1].legend(title="Condition", bbox_to_anchor=(1.05, 1), loc='upper left')
+
+    plt.tight_layout()
+    plt.show()
