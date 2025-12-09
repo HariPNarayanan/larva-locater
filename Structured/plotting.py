@@ -2990,3 +2990,149 @@ def plot_metric_summary(
 
     plt.tight_layout()
     plt.show()
+
+def plot_prefindex_and_successrate_combined(
+    dataframe,
+    bin_size=100,
+    target_x=14,
+    target_y=2,
+    radius=2,
+    assign_max_if_unreached=True,
+    frame_col='Frame',
+    individual_col='Individual',
+    x_col='X',
+    y_col='Y',
+    condition_col='Condition',
+    concentration_col='Concentration'
+):
+    """
+    Combines Preference Index and Success Rate plots:
+    - Success Rate: barplot per condition
+    - Preference Index: scatter plot with SEM error bars per Frame Bin and condition
+    - Conditions appear in correct order; strongest concentration gets darkest hue.
+    """
+
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+
+    # -------------------------------------------------------------------------
+    # 1. Define color palettes and reverse for darkest = strongest concentration
+    # -------------------------------------------------------------------------
+    fed_conditions = sorted(dataframe.loc[dataframe[condition_col].str.contains('Fed'), condition_col].unique())
+    fiveh_conditions = sorted(dataframe.loc[dataframe[condition_col].str.contains('5h'), condition_col].unique())
+    other_conditions = sorted(dataframe.loc[~dataframe[condition_col].str.contains('Fed|5h'), condition_col].unique())
+
+    fed_palette = list(reversed(sns.color_palette("Blues", n_colors=max(3, len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Oranges", n_colors=max(3, len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))))
+
+    condition_colors = {}
+    for c, color in zip(fed_conditions, fed_palette):
+        condition_colors[c] = color
+    for c, color in zip(fiveh_conditions, fiveh_palette):
+        condition_colors[c] = color
+    for c, color in zip(other_conditions, other_palette):
+        condition_colors[c] = color
+
+    # -------------------------------------------------------------------------
+    # 2. Determine condition order
+    # -------------------------------------------------------------------------
+    ordered_conditions = []
+    unique_concs = sorted(dataframe[concentration_col].unique())
+
+    for conc in unique_concs:
+        conc_subset = dataframe[dataframe[concentration_col] == conc]
+        fed = sorted(conc_subset.loc[conc_subset[condition_col].str.contains('Fed'), condition_col].unique())
+        fiveh = sorted(conc_subset.loc[conc_subset[condition_col].str.contains('5h'), condition_col].unique())
+        others = sorted(conc_subset.loc[~conc_subset[condition_col].str.contains('Fed|5h'), condition_col].unique())
+        ordered_conditions.extend(fed + fiveh + others)
+
+    # -------------------------------------------------------------------------
+    # 3. Compute Success Rate
+    # -------------------------------------------------------------------------
+    success_records = []
+    for cond, subdf in dataframe.groupby(condition_col):
+        success_per_individual = []
+        for ind, df_ind in subdf.groupby(individual_col):
+            df_ind = df_ind.sort_values(by=frame_col)
+            success = np.sqrt((df_ind[x_col] - target_x)**2 + (df_ind[y_col] - target_y)**2) <= radius
+            if assign_max_if_unreached and not success.any():
+                success_per_individual.append(0)
+            else:
+                success_per_individual.append(success.any())
+        success_records.append({
+            'Condition': cond,
+            'Success Rate': np.mean(success_per_individual)
+        })
+    success_df = pd.DataFrame(success_records)
+
+    # -------------------------------------------------------------------------
+    # 4. Compute Preference Index
+    # -------------------------------------------------------------------------
+    prefindex_records = []
+    for (cond, ind), subdf in dataframe.groupby([condition_col, individual_col]):
+        subdf = subdf.sort_values(by=frame_col)
+        subdf['Bin'] = (subdf[frame_col] // bin_size) * bin_size
+        grouped = subdf.groupby('Bin')[[x_col, y_col]].mean()
+        prefindex_records.append(pd.DataFrame({
+            'Frame Bin': grouped.index,
+            'Preference Index (Z1 - Z3)': (grouped[x_col] - grouped[y_col]) / (abs(grouped[y_col]) + abs(grouped[x_col]) + 1e-9),
+            'Condition': cond
+        }))
+    prefindex_df = pd.concat(prefindex_records, ignore_index=True)
+
+    # -------------------------------------------------------------------------
+    # 5. Compute mean and SEM for scatter plot
+    # -------------------------------------------------------------------------
+    summary_df = (
+        prefindex_df
+        .groupby(['Condition', 'Frame Bin'])
+        .agg(
+            Mean=('Preference Index (Z1 - Z3)', 'mean'),
+            SEM=('Preference Index (Z1 - Z3)', lambda x: x.std(ddof=1)/np.sqrt(len(x)))
+        )
+        .reset_index()
+    )
+
+    # -------------------------------------------------------------------------
+    # 6. Plotting
+    # -------------------------------------------------------------------------
+    fig, axes = plt.subplots(1, 2, figsize=(18,6))
+
+    # A. Success Rate barplot
+    sns.barplot(
+        data=success_df,
+        x='Condition',
+        y='Success Rate',
+        order=ordered_conditions,
+        palette=condition_colors,
+        ax=axes[0]
+    )
+    axes[0].set_title("Success Rate per Condition")
+    axes[0].set_xlabel("Condition")
+    axes[0].set_ylabel("Success Rate")
+    axes[0].set_ylim(0,1)
+    axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=45, ha='right')
+
+    # B. Preference Index scatter with SEM
+    for cond in ordered_conditions:
+        cond_data = summary_df[summary_df['Condition'] == cond]
+        axes[1].errorbar(
+            cond_data['Frame Bin'],
+            cond_data['Mean'],
+            yerr=cond_data['SEM'],
+            fmt='o',
+            label=cond,
+            color=condition_colors[cond],
+            capsize=3
+        )
+    axes[1].axhline(0, linestyle='--', color='gray', linewidth=1)
+    axes[1].set_title("Preference Index ± SEM by Condition and Frame Bin")
+    axes[1].set_xlabel("Frame Bin")
+    axes[1].set_ylabel("Preference Index (Z1 - Z3)")
+    axes[1].legend(title="Condition", bbox_to_anchor=(1.05,1), loc='upper left')
+
+    plt.tight_layout()
+    plt.show()
