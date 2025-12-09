@@ -494,57 +494,105 @@ def plot_distance_by_condition_average(
     plt.show()
 
 
-def plot_speed_by_condition(df, frame_column='Frame', speed_column='Speed', condition_column='Condition', bin_size=100, num_bins_to_display=4):
+def plot_speed_by_condition(
+    df,
+    frame_column='Frame',
+    speed_column='Speed',
+    condition_column='Condition',
+    concentration_column='Concentration',   # NEW: for ordering logic
+    bin_size=100,
+    num_bins_to_display=4
+):
     """
     Plots boxplots of 'Speed' binned by 'Frame' intervals, comparing different conditions.
-    Displays only the middle 'num_bins_to_display' bins.
-    
-    Parameters:
-        df (pd.DataFrame): The DataFrame containing 'Speed', 'Frame', and 'Condition' columns.
-        frame_column (str): The column name representing the frame number.
-        speed_column (str): The column name representing the pre-calculated speed.
-        condition_column (str): The column name representing the condition for comparison.
-        bin_size (int): The number of frames to group together in each bin for boxplots.
-        num_bins_to_display (int): The number of middle bins to display (e.g., 3 for the middle 3 bins).
+    Uses same colour logic and ordering as the combined PrefIndex/SuccessRate function.
     """
-    # Ensure the necessary columns exist
-    if not {frame_column, speed_column, condition_column}.issubset(df.columns):
-        raise ValueError(f"DataFrame must contain '{frame_column}', '{speed_column}', and '{condition_column}' columns.")
-    
-    # Add a column for the bin (Frame interval)
+
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+
+    # -------------------------------------------------------------------------
+    # 1. Validate input
+    # -------------------------------------------------------------------------
+    required = {frame_column, speed_column, condition_column}
+    if not required.issubset(df.columns):
+        raise ValueError(f"DataFrame must contain columns: {required}")
+
+    if concentration_column not in df.columns:
+        raise ValueError(f"DataFrame must contain '{concentration_column}' for colour ordering.")
+
+    # -------------------------------------------------------------------------
+    # 2. Build color palette logic (Fed / 5h / Others)
+    # -------------------------------------------------------------------------
+    fed_conditions = sorted(df.loc[df[condition_column].str.contains('Fed'), condition_column].unique())
+    fiveh_conditions = sorted(df.loc[df[condition_column].str.contains('5h'), condition_column].unique())
+    other_conditions = sorted(df.loc[~df[condition_column].str.contains('Fed|5h'), condition_column].unique())
+
+    fed_palette = list(reversed(sns.color_palette("Oranges", n_colors=max(3, len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Blues", n_colors=max(3, len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))))
+
+    condition_colors = {}
+    for c, color in zip(fed_conditions, fed_palette):
+        condition_colors[c] = color
+    for c, color in zip(fiveh_conditions, fiveh_palette):
+        condition_colors[c] = color
+    for c, color in zip(other_conditions, other_palette):
+        condition_colors[c] = color
+
+    # -------------------------------------------------------------------------
+    # 3. Determine consistent condition order
+    # -------------------------------------------------------------------------
+    ordered_conditions = []
+    unique_concs = sorted(df[concentration_column].unique())
+
+    for conc in unique_concs:
+        sub = df[df[concentration_column] == conc]
+        fed = sorted(sub.loc[sub[condition_column].str.contains('Fed'), condition_column].unique())
+        fiveh = sorted(sub.loc[sub[condition_column].str.contains('5h'), condition_column].unique())
+        others = sorted(sub.loc[~sub[condition_column].str.contains('Fed|5h'), condition_column].unique())
+        ordered_conditions.extend(fed + fiveh + others)
+
+    # -------------------------------------------------------------------------
+    # 4. Bin frames
+    # -------------------------------------------------------------------------
+    df = df.copy()
     df['Bin'] = (df[frame_column] // bin_size) * bin_size
-    
-    # Find the range of bins
-    unique_bins = sorted(df['Bin'].unique())  # Get sorted unique bins
+
+    unique_bins = sorted(df['Bin'].unique())
     total_bins = len(unique_bins)
-    
-    # Find the middle bins
-    middle_start_index = (total_bins - num_bins_to_display) // 2
-    middle_end_index = middle_start_index + num_bins_to_display
-    
-    # Filter the data to only include the middle bins
-    middle_bins = unique_bins[middle_start_index:middle_end_index]
+
+    middle_start = (total_bins - num_bins_to_display) // 2
+    middle_end = middle_start + num_bins_to_display
+
+    middle_bins = unique_bins[middle_start:middle_end]
     df_filtered = df[df['Bin'].isin(middle_bins)]
-    
-    # Plotting the boxplots for Speed within the filtered bins and grouped by Condition
+
+    # -------------------------------------------------------------------------
+    # 5. Plot boxplots
+    # -------------------------------------------------------------------------
     plt.figure(figsize=(12, 6))
-    sns.boxplot(data=df_filtered, x='Bin', y=speed_column, hue=condition_column)
-    
-    plt.title(f'Boxplots of Speed binned by Frame intervals (Middle {num_bins_to_display} bins) and grouped by Condition')
+
+    sns.boxplot(
+        data=df_filtered,
+        x='Bin',
+        y=speed_column,
+        hue=condition_column,
+        hue_order=ordered_conditions,
+        palette=condition_colors
+    )
+
+    plt.title(f'Boxplots of Speed by Frame Bins (Middle {num_bins_to_display})')
     plt.xlabel('Frame Interval')
     plt.ylabel('Speed')
-    plt.xticks(rotation=45)  # Rotate x labels for readability
+    plt.xticks(rotation=45)
 
-    # Move the hue legend outside the plot
     plt.legend(title=condition_column, bbox_to_anchor=(1.05, 1), loc='upper left')
-    
     plt.tight_layout()
     plt.show()
 
-    import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
 
 import matplotlib.pyplot as plt
 import seaborn as sns
