@@ -1243,3 +1243,86 @@ def plot_post_success_dwell_total_filtered(
     plt.show()
 
     return dwell_df
+
+def plot_post_success_dwell_box_scatter(
+    df,
+    target_x=14,
+    target_y=2,
+    success_radius=2,
+    frame_col="Frame",
+    individual_col="Individual",
+    x_col="X",
+    y_col="Y",
+    condition_col="Condition"
+):
+    """
+    Compute and plot post-success dwell time for each individual.
+    Success = first time individual enters the success zone.
+    Dwell time = total frames inside after first entry (multiple entries allowed).
+    Unsuccessful individuals (dwell = 0) are excluded.
+
+    Produces a boxplot + scatter per condition.
+
+    Returns:
+        dwell_df: rows = individuals, columns = [Condition, Individual, DwellTime_seconds]
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # --- Compute distances and inside status ---
+    df = df.copy()
+    df["dist"] = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
+    df["inside"] = df["dist"] <= success_radius
+
+    dwell_records = []
+
+    # --- Dwell-time calculation (same logic as your function) ---
+    for (cond, indiv), sub in df.groupby([condition_col, individual_col]):
+        sub = sub.sort_values(frame_col)
+
+        inside_frames = sub[sub["inside"]][frame_col].values
+        if len(inside_frames) == 0:
+            continue  # skip unsuccessful individuals
+
+        first_entry = inside_frames[0]
+        after_first = sub[sub[frame_col] >= first_entry]
+        dwell = after_first["inside"].sum()
+
+        if dwell > 0:
+            dwell_records.append([cond, indiv, dwell])
+
+    dwell_df = pd.DataFrame(
+        dwell_records,
+        columns=[condition_col, individual_col, "DwellTime_seconds"]
+    )
+
+    # --- Plot: box + scatter ---
+    plt.figure(figsize=(8, 6))
+
+    sns.boxplot(
+        data=dwell_df,
+        x=condition_col,
+        y="DwellTime_seconds",
+        showfliers=False,
+        width=0.6
+    )
+
+    sns.stripplot(
+        data=dwell_df,
+        x=condition_col,
+        y="DwellTime_seconds",
+        color="black",
+        alpha=0.7,
+        jitter=True,
+        size=5
+    )
+
+    plt.ylabel("Post-success dwell time (seconds)")
+    plt.xlabel("Condition")
+    plt.title(f"Post-success Dwell Time by Condition (radius = {success_radius})")
+
+    plt.tight_layout()
+    plt.show()

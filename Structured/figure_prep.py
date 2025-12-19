@@ -497,9 +497,9 @@ def radial_sholl_heatmap_per_bin_normalized(
     individual_col='Individual',
     x_col='X',
     y_col='Y',
-    max_radius=10,
+    max_radius=20,
     condition_col='Condition',
-    spatial_bin=1
+    spatial_bin=2
 ):
     df = df.copy()
 
@@ -1017,16 +1017,32 @@ def plot_probability_and_bootstrap_logistic(
     conditions = prob_df['Condition'].unique()
 
     # --------------------------------------------------------------
-    # 2) Build palette (unchanged)
+    # 2) Build palette (FINAL scheme)
     # --------------------------------------------------------------
     if palette is None:
-        fed_conditions = sorted(df.loc[df[condition_col].str.contains('Fed', na=False), condition_col].unique())
-        fiveh_conditions = sorted(df.loc[df[condition_col].str.contains('5h', na=False), condition_col].unique())
-        other_conditions = sorted(df.loc[~df[condition_col].str.contains('Fed|5h', na=False), condition_col].unique())
+        fed_conditions = sorted(
+            df.loc[df[condition_col].str.contains('Fed', na=False), condition_col].unique()
+        )
+        fiveh_conditions = sorted(
+            df.loc[df[condition_col].str.contains('5h', na=False), condition_col].unique()
+        )
+        other_conditions = sorted(
+            df.loc[~df[condition_col].str.contains('Fed|5h', na=False), condition_col].unique()
+        )
 
-        fed_palette = list(reversed(sns.color_palette("Blues", n_colors=max(3, len(fed_conditions)))))
-        fiveh_palette = list(reversed(sns.color_palette("Oranges", n_colors=max(3, len(fiveh_conditions)))))
-        other_palette = list(reversed(sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))))
+        # FINAL mapping:
+        #   Fed   -> Oranges
+        #   5h    -> Blues
+        #   Other -> Greens
+        fed_palette = list(reversed(
+            sns.color_palette("Oranges", n_colors=max(3, len(fed_conditions)))
+        ))
+        fiveh_palette = list(reversed(
+            sns.color_palette("Blues", n_colors=max(3, len(fiveh_conditions)))
+        ))
+        other_palette = list(reversed(
+            sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))
+        ))
 
         condition_colors = {}
         for c, col in zip(fed_conditions, fed_palette):
@@ -1403,36 +1419,74 @@ def plot_probability_and_bootstrap_logistic_with_dwell(
     prob_df = merged[['Condition', 'Radius', 'total_frames', 'contact_count', 'P_contact',
                       'mean_dwell_seconds', 'scaled_dwell', 'P_weighted']].sort_values(['Condition','Radius']).reset_index(drop=True)
 
-    # ---------------- build palette if needed ----------------
+    # ---------------- FINAL palette + order logic (authoritative) ----------------
     conditions = prob_df['Condition'].unique()
-    if palette is None:
-        fed_conditions = sorted(df.loc[df[condition_col].str.contains('Fed', na=False), condition_col].unique())
-        fiveh_conditions = sorted(df.loc[df[condition_col].str.contains('5h', na=False), condition_col].unique())
-        other_conditions = sorted(df.loc[~df[condition_col].str.contains('Fed|5h', na=False), condition_col].unique())
 
-        fed_palette = list(reversed(sns.color_palette("Blues", n_colors=max(3, len(fed_conditions)))))
-        fiveh_palette = list(reversed(sns.color_palette("Oranges", n_colors=max(3, len(fiveh_conditions)))))
-        other_palette = list(reversed(sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))))
+    fed_conditions = sorted(
+        df.loc[df[condition_col].str.contains('Fed', na=False), condition_col].unique()
+    )
+    fiveh_conditions = sorted(
+        df.loc[df[condition_col].str.contains('5h', na=False), condition_col].unique()
+    )
+    other_conditions = sorted(
+        df.loc[~df[condition_col].str.contains('Fed|5h', na=False), condition_col].unique()
+    )
 
-        condition_colors = {}
-        for c, col in zip(fed_conditions, fed_palette):
-            condition_colors[c] = col
-        for c, col in zip(fiveh_conditions, fiveh_palette):
-            condition_colors[c] = col
-        for c, col in zip(other_conditions, other_palette):
-            condition_colors[c] = col
+    fed_palette = list(reversed(
+        sns.color_palette("Oranges", n_colors=max(3, len(fed_conditions)))
+    ))
+    fiveh_palette = list(reversed(
+        sns.color_palette("Blues", n_colors=max(3, len(fiveh_conditions)))
+    ))
+    other_palette = list(reversed(
+        sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))
+    ))
 
-        palette = condition_colors.copy()
-    # fallback for missing
-    for i, cond in enumerate(sorted(conditions)):
-        if cond not in palette:
-            palette[cond] = list(sns.color_palette("husl", n_colors=len(conditions)))[i % len(conditions)]
+    palette = {}
+    for c, col in zip(fed_conditions, fed_palette):
+        palette[c] = col
+    for c, col in zip(fiveh_conditions, fiveh_palette):
+        palette[c] = col
+    for c, col in zip(other_conditions, other_palette):
+        palette[c] = col
+
+        # ---------------- FINAL condition order (authoritative) ----------------
+    ordered_conditions = []
+    unique_concs = sorted(df[concentration_col].unique())
+
+    for conc in unique_concs:
+        conc_subset = df[df[concentration_col] == conc]
+
+        fed = sorted(
+            conc_subset.loc[
+                conc_subset[condition_col].str.contains('Fed', na=False),
+                condition_col
+            ].unique()
+        )
+        fiveh = sorted(
+            conc_subset.loc[
+                conc_subset[condition_col].str.contains('5h', na=False),
+                condition_col
+            ].unique()
+        )
+        others = sorted(
+            conc_subset.loc[
+                ~conc_subset[condition_col].str.contains('Fed|5h', na=False),
+                condition_col
+            ].unique()
+        )
+
+        ordered_conditions.extend(fed + fiveh + others)
+
+    # Keep only those that appear in prob_df
+    ordered_conditions = [c for c in ordered_conditions if c in conditions]
+
 
     # ---------------- Fit logistic + bootstrap (robust) ----------------
     fit_summary = []
     bootstrap_results = {}
 
-    for cond in conditions:
+    for cond in ordered_conditions:
         sub = prob_df[prob_df['Condition'] == cond].sort_values('Radius')
         r = sub['Radius'].values
         p = sub['P_weighted'].values
@@ -1542,7 +1596,7 @@ def plot_probability_and_bootstrap_logistic_with_dwell(
     ax_stat, ax_fit = axes
 
     # empirical: P_contact and P_weighted points
-    for cond in conditions:
+    for cond in ordered_conditions:
         sub = prob_df[prob_df['Condition'] == cond]
         ax_stat.plot(sub['Radius'], sub['P_contact'], 'o-', label=f"{cond} (P_contact)", alpha=0.6, color=palette.get(cond))
         ax_stat.plot(sub['Radius'], sub['P_weighted'], 's--', label=f"{cond} (P_weighted)", alpha=0.9, color=palette.get(cond))
@@ -1553,7 +1607,7 @@ def plot_probability_and_bootstrap_logistic_with_dwell(
 
     # fitted curves with CI shading
     r_dense = np.linspace(prob_df['Radius'].min(), prob_df['Radius'].max(), 400)
-    for cond in conditions:
+    for cond in ordered_conditions:
         row = params_df[params_df['Condition'] == cond].iloc[0]
         A_fit, L_fit, k_fit, r0_fit = row[['A','L','k','r0']]
         if not np.isnan(A_fit):
@@ -1629,16 +1683,18 @@ def plot_post_success_dwell_total_filtered(
     individual_col="Individual",
     x_col="X",
     y_col="Y",
-    condition_col="Condition"
+    condition_col="Condition",
+    concentration_col="Concentration"
 ):
     """
     Compute and plot post-success dwell time for each individual.
     Success = first time individual enters the success zone.
     Dwell time = total frames inside after first entry (multiple entries allowed).
     Unsuccessful individuals (dwell = 0) are excluded from plots.
-    
+
     Returns:
-        dwell_df: rows = individuals, columns = [Condition, dwell_time]
+        dwell_df: rows = individuals,
+                  columns = [Condition, Individual, DwellTime_seconds]
     """
 
     import numpy as np
@@ -1646,58 +1702,329 @@ def plot_post_success_dwell_total_filtered(
     import matplotlib.pyplot as plt
     import seaborn as sns
 
-    # compute distances
+    # ---------------------------------------------------------------------
+    # Compute distances and inside flag
+    # ---------------------------------------------------------------------
     df = df.copy()
     df["dist"] = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
     df["inside"] = df["dist"] <= success_radius
 
     dwell_records = []
 
+    # ---------------------------------------------------------------------
+    # Dwell-time logic (unchanged)
+    # ---------------------------------------------------------------------
     for (cond, indiv), sub in df.groupby([condition_col, individual_col]):
         sub = sub.sort_values(frame_col)
 
         inside_frames = sub[sub["inside"]][frame_col].values
         if len(inside_frames) == 0:
-            continue  # skip unsuccessful individuals
+            continue
 
         first_entry = inside_frames[0]
-
-        # sum all frames inside AFTER first entry
         after_first = sub[sub[frame_col] >= first_entry]
-        dwell = after_first["inside"].sum()  # number of frames inside
+        dwell = after_first["inside"].sum()
 
-        dwell_records.append([cond, indiv, dwell])
+        if dwell > 0:
+            dwell_records.append([cond, indiv, dwell])
 
-    dwell_df = pd.DataFrame(dwell_records, columns=[condition_col, individual_col, "DwellTime_seconds"])
+    dwell_df = pd.DataFrame(
+        dwell_records,
+        columns=[condition_col, individual_col, "DwellTime_seconds"]
+    )
 
-    # Filter out zero dwell times (should already be excluded, but safe)
-    dwell_df = dwell_df[dwell_df["DwellTime_seconds"] > 0]
+    if dwell_df.empty:
+        raise RuntimeError("No successful individuals with dwell time > 0.")
 
-    # Plot histogram + ECDF
-    plt.figure(figsize=(12,6))
+    # ---------------------------------------------------------------------
+    # 1. FINAL palette logic (AUTHORITATIVE)
+    # ---------------------------------------------------------------------
+    fed_conditions = sorted(
+        df.loc[df[condition_col].str.contains("Fed", na=False), condition_col].unique()
+    )
+    fiveh_conditions = sorted(
+        df.loc[df[condition_col].str.contains("5h", na=False), condition_col].unique()
+    )
+    other_conditions = sorted(
+        df.loc[~df[condition_col].str.contains("Fed|5h", na=False), condition_col].unique()
+    )
+
+    fed_palette = list(reversed(
+        sns.color_palette("Oranges", n_colors=max(3, len(fed_conditions)))
+    ))
+    fiveh_palette = list(reversed(
+        sns.color_palette("Blues", n_colors=max(3, len(fiveh_conditions)))
+    ))
+    other_palette = list(reversed(
+        sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))
+    ))
+
+    condition_colors = {}
+    for c, color in zip(fed_conditions, fed_palette):
+        condition_colors[c] = color
+    for c, color in zip(fiveh_conditions, fiveh_palette):
+        condition_colors[c] = color
+    for c, color in zip(other_conditions, other_palette):
+        condition_colors[c] = color
+
+    # ---------------------------------------------------------------------
+    # 2. FINAL condition ordering (AUTHORITATIVE)
+    # ---------------------------------------------------------------------
+    ordered_conditions = []
+    unique_concs = sorted(df[concentration_col].unique())
+
+    for conc in unique_concs:
+        conc_subset = df[df[concentration_col] == conc]
+
+        fed = sorted(
+            conc_subset.loc[
+                conc_subset[condition_col].str.contains("Fed", na=False),
+                condition_col
+            ].unique()
+        )
+        fiveh = sorted(
+            conc_subset.loc[
+                conc_subset[condition_col].str.contains("5h", na=False),
+                condition_col
+            ].unique()
+        )
+        others = sorted(
+            conc_subset.loc[
+                ~conc_subset[condition_col].str.contains("Fed|5h", na=False),
+                condition_col
+            ].unique()
+        )
+
+        ordered_conditions.extend(fed + fiveh + others)
+
+    # keep only conditions actually present in dwell_df
+    ordered_conditions = [c for c in ordered_conditions
+                          if c in dwell_df[condition_col].unique()]
+
+    # ---------------------------------------------------------------------
+    # Plotting
+    # ---------------------------------------------------------------------
+    plt.figure(figsize=(12, 6))
 
     # Histogram
-    plt.subplot(1,2,1)
-    sns.histplot(data=dwell_df, x="DwellTime_seconds", hue=condition_col, kde=False, bins=30)
+    plt.subplot(1, 2, 1)
+    sns.histplot(
+        data=dwell_df,
+        x="DwellTime_seconds",
+        hue=condition_col,
+        hue_order=ordered_conditions,
+        palette=condition_colors,
+        bins=30,
+        kde=False,
+        alpha=0.8
+    )
     plt.xlabel("Post-success dwell time (seconds)")
     plt.ylabel("Count")
-    plt.title("Histogram of Dwell Times (successful only): radius =" + str(success_radius))
+    plt.title(f"Histogram of Dwell Times (successful only): radius = {success_radius}")
 
     # ECDF
-    plt.subplot(1,2,2)
-    for cond, sub in dwell_df.groupby(condition_col):
+    plt.subplot(1, 2, 2)
+    for cond in ordered_conditions:
+        sub = dwell_df[dwell_df[condition_col] == cond]
+        if sub.empty:
+            continue
         sorted_vals = np.sort(sub["DwellTime_seconds"])
-        yvals = np.arange(1, len(sorted_vals)+1) / len(sorted_vals)
-        plt.plot(sorted_vals, yvals, label=cond)
+        yvals = np.arange(1, len(sorted_vals) + 1) / len(sorted_vals)
+        plt.plot(
+            sorted_vals,
+            yvals,
+            label=cond,
+            color=condition_colors.get(cond),
+            linewidth=2
+        )
+
     plt.xlabel("Post-success dwell time (seconds)")
     plt.ylabel("ECDF")
-    plt.title("Empirical CDF of Dwell Times (successful only): radius =" + str(success_radius))
+    plt.title(f"Empirical CDF of Dwell Times (successful only): radius = {success_radius}")
     plt.legend()
 
     plt.tight_layout()
     plt.show()
 
     return dwell_df
+
+
+
+def plot_post_success_dwell_box_scatter(
+    df,
+    target_x=14,
+    target_y=2,
+    success_radius=2,
+    frame_col="Frame",
+    individual_col="Individual",
+    x_col="X",
+    y_col="Y",
+    condition_col="Condition",
+    concentration_col="Concentration"
+):
+    """
+    Compute and plot post-success dwell time for each individual.
+    Success = first time individual enters the success zone.
+    Dwell time = total frames inside after first entry (multiple entries allowed).
+    Unsuccessful individuals (dwell = 0) are excluded.
+
+    Uses the FINAL authoritative hue + order logic:
+      - Fed → Oranges
+      - 5h → Blues
+      - Others → Greens
+      - Ordered by concentration, then Fed → 5h → Others
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # ---------------------------------------------------------------------
+    # Compute distances
+    # ---------------------------------------------------------------------
+    df = df.copy()
+    df["dist"] = np.sqrt((df[x_col] - target_x) ** 2 + (df[y_col] - target_y) ** 2)
+    df["inside"] = df["dist"] <= success_radius
+
+    dwell_records = []
+
+    # ---------------------------------------------------------------------
+    # Dwell-time logic (unchanged)
+    # ---------------------------------------------------------------------
+    for (cond, indiv), sub in df.groupby([condition_col, individual_col]):
+        sub = sub.sort_values(frame_col)
+
+        inside_frames = sub.loc[sub["inside"], frame_col].values
+        if len(inside_frames) == 0:
+            continue
+
+        first_entry = inside_frames[0]
+        after_first = sub[sub[frame_col] >= first_entry]
+        dwell = after_first["inside"].sum()
+
+        if dwell > 0:
+            dwell_records.append([cond, indiv, dwell])
+
+    dwell_df = pd.DataFrame(
+        dwell_records,
+        columns=[condition_col, individual_col, "DwellTime_seconds"]
+    )
+
+    if dwell_df.empty:
+        raise RuntimeError("No successful individuals with dwell time > 0.")
+
+    # ---------------------------------------------------------------------
+    # 1. FINAL palette logic (authoritative)
+    # ---------------------------------------------------------------------
+    fed_conditions = sorted(
+        df.loc[df[condition_col].str.contains("Fed", na=False), condition_col].unique()
+    )
+    fiveh_conditions = sorted(
+        df.loc[df[condition_col].str.contains("5h", na=False), condition_col].unique()
+    )
+    other_conditions = sorted(
+        df.loc[~df[condition_col].str.contains("Fed|5h", na=False), condition_col].unique()
+    )
+
+    fed_palette = list(reversed(
+        sns.color_palette("Oranges", n_colors=max(3, len(fed_conditions)))
+    ))
+    fiveh_palette = list(reversed(
+        sns.color_palette("Blues", n_colors=max(3, len(fiveh_conditions)))
+    ))
+    other_palette = list(reversed(
+        sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))
+    ))
+
+    condition_colors = {}
+    for c, color in zip(fed_conditions, fed_palette):
+        condition_colors[c] = color
+    for c, color in zip(fiveh_conditions, fiveh_palette):
+        condition_colors[c] = color
+    for c, color in zip(other_conditions, other_palette):
+        condition_colors[c] = color
+
+    # ---------------------------------------------------------------------
+    # 2. FINAL condition ordering (authoritative)
+    # ---------------------------------------------------------------------
+    ordered_conditions = []
+    unique_concs = sorted(df[concentration_col].unique())
+
+    for conc in unique_concs:
+        conc_subset = df[df[concentration_col] == conc]
+
+        fed = sorted(
+            conc_subset.loc[
+                conc_subset[condition_col].str.contains("Fed", na=False),
+                condition_col
+            ].unique()
+        )
+        fiveh = sorted(
+            conc_subset.loc[
+                conc_subset[condition_col].str.contains("5h", na=False),
+                condition_col
+            ].unique()
+        )
+        others = sorted(
+            conc_subset.loc[
+                ~conc_subset[condition_col].str.contains("Fed|5h", na=False),
+                condition_col
+            ].unique()
+        )
+
+        ordered_conditions.extend(fed + fiveh + others)
+
+    # Keep only conditions that actually appear in dwell_df
+    ordered_conditions = [
+        c for c in ordered_conditions
+        if c in dwell_df[condition_col].unique()
+    ]
+
+    # ---------------------------------------------------------------------
+    # Plot
+    # ---------------------------------------------------------------------
+    plt.figure(figsize=(9, 6))
+
+    sns.boxplot(
+        data=dwell_df,
+        x=condition_col,
+        y="DwellTime_seconds",
+        hue=condition_col,
+        hue_order=ordered_conditions,
+        palette=condition_colors,
+        dodge=False,
+        showfliers=False,
+        width=0.6
+    )
+
+    sns.stripplot(
+        data=dwell_df,
+        x=condition_col,
+        y="DwellTime_seconds",
+        hue=condition_col,
+        hue_order=ordered_conditions,
+        palette=condition_colors,
+        dodge=False,
+        jitter=True,
+        size=5,
+        alpha=0.75,
+        edgecolor="black",
+        linewidth=0.5
+    )
+
+    # Remove duplicate legend from layered plots
+    plt.legend([], [], frameon=False)
+
+    plt.xlabel("Condition")
+    plt.ylabel("Post-success dwell time (seconds)")
+    plt.title(f"Post-success Dwell Time by Condition (radius = {success_radius})")
+
+    plt.tight_layout()
+    plt.show()
+
+    return dwell_df
+
 
 
 def run_full_trajectory_analysis(
@@ -1709,7 +2036,7 @@ def run_full_trajectory_analysis(
     target_x=14,
     target_y=2,
     radius=2,
-    spatial_bin=1,
+    spatial_bin=2,
     success_radius=2,
     radius_steps=None,
     n_boot=500,
@@ -1799,7 +2126,7 @@ def run_full_trajectory_analysis(
         random_state=random_state
     )
 
-      # ---------------------------------------------------------
+    # ---------------------------------------------------------
     # 7. NEW: Post-success dwell analysis
     # ---------------------------------------------------------
     print("Computing post-success dwell time (successful only)...")
@@ -1810,6 +2137,19 @@ def run_full_trajectory_analysis(
         target_y=target_y,
         success_radius=success_radius
     )
+
+    # ---------------------------------------------------------
+    # 7. NEW: Post-success dwell analysis
+    # ---------------------------------------------------------
+    print("Plotting post-success dwell time box plot...")
+
+    plot_post_success_dwell_box_scatter(
+    df,
+    target_x=target_x,
+    target_y=target_y,
+    success_radius=success_radius
+    )
+
 
     print("✔ Full analysis pipeline complete.")
 
