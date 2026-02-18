@@ -181,16 +181,36 @@ def plot_prefindex_and_successrate_combined(
     # 4. Compute Preference Index (same logic as before)
     # -------------------------------------------------------------------------
     prefindex_df = []
+
     for (cond, ind), subdf in dataframe.groupby([condition_col, individual_col]):
         subdf = subdf.sort_values(by=frame_col)
         subdf['Bin'] = (subdf[frame_col] // bin_size) * bin_size
-        grouped = subdf.groupby('Bin')[[x_col, y_col]].mean()
-        prefindex_df.append(pd.DataFrame({
-            'Frame Bin': grouped.index,
-            'Preference Index (Z1 - Z3)': -(grouped[y_col] - grouped[x_col]) / (abs(grouped[y_col]) + abs(grouped[x_col]) + 1e-9),
+
+        binned = subdf.groupby('Bin')
+
+        for bin_id, df_bin in binned:
+
+            y_vals = df_bin[y_col]
+
+            bottom = (y_vals <= 10).sum()
+            top = (y_vals >= 20).sum()
+
+            denom = bottom + top
+
+            if denom == 0:
+                pi = np.nan
+            else:
+                pi = (bottom - top) / denom
+
+            prefindex_df.append({
+            'Frame Bin': bin_id,
+            'Preference Index (Z1 - Z3)': pi,
             'Condition': cond
-        }))
-    prefindex_df = pd.concat(prefindex_df, ignore_index=True)
+                                })
+
+
+    prefindex_df = pd.DataFrame(prefindex_df)
+
 
     # -------------------------------------------------------------------------
     # 5. Plot both panels
@@ -242,61 +262,105 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-def plot_zone_means_subplot_sem(df, filter_column='Concentration', filter_values=None,
-                               titles=["Early", "Mid", "Late"], condition_colors=None):
+def plot_zone_means_subplot_sem(
+    df,
+    filter_column='Concentration',
+    filter_values=None,
+    titles=["Early", "Mid", "Late"],
+    condition_colors=None
+):
     """
-    Creates a subplot panel of mean zone proportions for different time points and a chosen filter column,
-    with SEM (standard error of the mean) added as error bars.
+    Creates a subplot panel of mean zone proportions for different time points
+    using FIXED arena zones (Bottom/Middle/Top thirds).
 
-    Parameters:
-        df (DataFrame): The full dataset.
-        filter_column (str): Column to filter by for subplot columns (default = 'Concentration').
-        filter_values (list or None): List of unique values to use from filter_column. If None, auto-detected.
-        titles (list): Titles for each timepoint row (default = ['Early', 'Mid', 'Late']).
-        condition_colors (dict or list or None): Optional color mapping.
+    Zones (based on Y coordinate):
+        Zone 1 (Bottom / Reference): 0–10 cm
+        Zone 2 (Middle): 10–20 cm
+        Zone 3 (Top): 20–30 cm
+
+    SEM is calculated across replicates.
     """
+
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
     import seaborn as sns
 
-    # Create unique replicate column (Condition + Trial)
+    df = df.copy()
+
+    # ------------------------------------------------------------------
+    # 1. Create replicate identifier
+    # ------------------------------------------------------------------
     if 'Trial' in df.columns:
-        df = df.copy()
         df['ReplicateID'] = df['Condition'].astype(str) + "_" + df['Trial'].astype(str)
     else:
-        df['ReplicateID'] = df['Condition']  # fallback
+        df['ReplicateID'] = df['Condition']
 
+    # ------------------------------------------------------------------
+    # 2. Define FIXED zone boundaries (match heatmap + PI)
+    # ------------------------------------------------------------------
+    # ZONE_BOUNDS = [10, 20]   # Bottom: <10 | Middle: 10–20 | Top: ≥20
+
+    # ---- If you prefer automatic detection of full arena height ----
+    arena_min = df['Y'].min()
+    arena_max = df['Y'].max()
+    arena_height = arena_max - arena_min
+    ZONE_BOUNDS = [
+        arena_min + arena_height / 3,
+        arena_min + 2 * arena_height / 3
+    ]
+
+    # ------------------------------------------------------------------
+    # 3. Determine filter values
+    # ------------------------------------------------------------------
     if filter_values is None:
         filter_values = sorted(df[filter_column].dropna().unique())
 
+    # ------------------------------------------------------------------
+    # 4. Split into early/mid/late by frames
+    # ------------------------------------------------------------------
     min_frame, max_frame = df['Frame'].min(), df['Frame'].max()
     frame_third = (max_frame - min_frame) // 3
 
     early_df = df[df['Frame'] <= min_frame + frame_third]
-    mid_df = df[(df['Frame'] > min_frame + frame_third) & (df['Frame'] <= min_frame + 2 * frame_third)]
+    mid_df = df[(df['Frame'] > min_frame + frame_third) &
+                (df['Frame'] <= min_frame + 2 * frame_third)]
     late_df = df[df['Frame'] > min_frame + 2 * frame_third]
 
     dataframes = [early_df, mid_df, late_df]
 
+    # ------------------------------------------------------------------
+    # 5. Create subplot grid
+    # ------------------------------------------------------------------
     num_rows = len(dataframes)
     num_cols = len(filter_values)
 
-    fig, axes = plt.subplots(num_rows, num_cols, figsize=(4 * num_cols, 4 * num_rows), sharey=True, sharex=True)
+    fig, axes = plt.subplots(
+        num_rows,
+        num_cols,
+        figsize=(4 * num_cols, 4 * num_rows),
+        sharey=True,
+        sharex=True
+    )
 
     if num_rows == 1:
         axes = np.expand_dims(axes, axis=0)
     if num_cols == 1:
         axes = np.expand_dims(axes, axis=1)
 
-    # Default palettes (used only if condition_colors not provided)
+    # ------------------------------------------------------------------
+    # 6. Default color handling
+    # ------------------------------------------------------------------
     red_shades = sns.color_palette("Reds", 3)
     blue_shades = sns.color_palette("Blues", 3)
-    red_shades = [(min(r, 1), min(g, 1), min(b, 1)) for r, g, b in red_shades]
-    blue_shades = [(min(r * 0.8, 1), min(g * 0.9, 1), min(b * 1.1, 1)) for r, g, b in blue_shades]
 
+    # ------------------------------------------------------------------
+    # 7. Compute and plot zone means
+    # ------------------------------------------------------------------
     for row_idx, (df_time, title) in enumerate(zip(dataframes, titles)):
+
         for col_idx, value in enumerate(filter_values):
+
             ax = axes[row_idx][col_idx]
             df_filtered = df_time[df_time[filter_column] == value]
 
@@ -304,29 +368,37 @@ def plot_zone_means_subplot_sem(df, filter_column='Concentration', filter_values
                 ax.set_visible(False)
                 continue
 
-            y_min, y_max = df_filtered['Y'].min(), df_filtered['Y'].max()
-            y_range = (y_max - y_min) / 3
-            y_bounds = [y_min + y_range, y_min + 2 * y_range]
-
             zone_stats = []
 
             for condition in df_filtered['Condition'].unique():
+
                 df_condition = df_filtered[df_filtered['Condition'] == condition]
                 starvation_status = df_condition['Starvation'].iloc[0]
 
                 grouped = df_condition.groupby('ReplicateID')
                 proportions = []
+
                 for rep, df_rep in grouped:
-                    p1 = np.mean(df_rep['Y'] < y_bounds[0])
-                    p2 = np.mean((df_rep['Y'] >= y_bounds[0]) & (df_rep['Y'] < y_bounds[1]))
-                    p3 = np.mean(df_rep['Y'] >= y_bounds[1])
+
+                    y_vals = df_rep['Y']
+
+                    p1 = np.mean(y_vals < ZONE_BOUNDS[0])                       # Bottom
+                    p2 = np.mean((y_vals >= ZONE_BOUNDS[0]) &
+                                 (y_vals < ZONE_BOUNDS[1]))                     # Middle
+                    p3 = np.mean(y_vals >= ZONE_BOUNDS[1])                      # Top
+
                     proportions.append([p1, p2, p3])
+
                 proportions = np.array(proportions)
 
                 means = proportions.mean(axis=0)
                 sems = proportions.std(axis=0, ddof=1) / np.sqrt(proportions.shape[0])
 
-                for zone, mean, sem in zip(['Zone 1', 'Zone 2', 'Zone 3'], means, sems):
+                for zone, mean, sem in zip(
+                    ['Zone 1 (Bottom)', 'Zone 2 (Middle)', 'Zone 3 (Top)'],
+                    means,
+                    sems
+                ):
                     zone_stats.append({
                         'Condition': condition,
                         'Starvation': starvation_status,
@@ -337,20 +409,29 @@ def plot_zone_means_subplot_sem(df, filter_column='Concentration', filter_values
 
             df_stats = pd.DataFrame(zone_stats)
 
-            # Handle colors
+            # ----------------------------------------------------------
+            # Color mapping
+            # ----------------------------------------------------------
             if condition_colors is not None:
                 if isinstance(condition_colors, dict):
-                    color_mapping = {cond: condition_colors[cond] for cond in df_stats['Condition'].unique()}
-                elif isinstance(condition_colors, list):
-                    unique_conditions = df_stats['Condition'].unique()
-                    color_mapping = {cond: color for cond, color in zip(unique_conditions, condition_colors)}
+                    color_mapping = {
+                        cond: condition_colors[cond]
+                        for cond in df_stats['Condition'].unique()
+                    }
                 else:
-                    raise ValueError("condition_colors must be a dict, list, or None")
+                    unique_conditions = df_stats['Condition'].unique()
+                    color_mapping = {
+                        cond: color
+                        for cond, color in zip(unique_conditions, condition_colors)
+                    }
             else:
                 color_mapping = {}
                 red_idx, blue_idx = 0, 0
                 for condition in df_stats['Condition'].unique():
-                    starvation_status = df_stats[df_stats['Condition'] == condition]['Starvation'].iloc[0]
+                    starvation_status = df_stats[
+                        df_stats['Condition'] == condition
+                    ]['Starvation'].iloc[0]
+
                     if starvation_status == '5h':
                         color_mapping[condition] = blue_shades[blue_idx]
                         blue_idx = (blue_idx + 1) % len(blue_shades)
@@ -358,31 +439,42 @@ def plot_zone_means_subplot_sem(df, filter_column='Concentration', filter_values
                         color_mapping[condition] = red_shades[red_idx]
                         red_idx = (red_idx + 1) % len(red_shades)
 
-            # Plot with SEM
+            # ----------------------------------------------------------
+            # Plot
+            # ----------------------------------------------------------
             for condition in df_stats['Condition'].unique():
+
                 df_cond = df_stats[df_stats['Condition'] == condition]
+
                 ax.errorbar(
                     df_cond['Zone'],
                     df_cond['Mean'],
                     yerr=df_cond['SEM'],
-                    marker='o', markersize=6,
-                    linestyle='-', linewidth=3,
+                    marker='o',
+                    markersize=6,
+                    linestyle='-',
+                    linewidth=3,
                     color=color_mapping[condition],
                     capsize=5,
                     label=condition
                 )
 
             ax.set_ylim(0, 1)
+
             if row_idx == 0:
                 ax.set_title(f"{filter_column}: {value}")
-                ax.legend(title="Condition", loc='upper right', fontsize=9, frameon=True)
+                ax.legend(title="Condition", loc='upper right',
+                          fontsize=9, frameon=True)
+
             if col_idx == 0:
                 ax.set_ylabel(f"{title}\nMean Proportion")
+
             if row_idx == num_rows - 1:
                 ax.set_xlabel("Zone")
 
     plt.tight_layout()
     plt.show()
+
 
 def plot_speed_by_condition(
     df,
@@ -2018,6 +2110,7 @@ def plot_post_success_dwell_box_scatter(
 
     plt.xlabel("Condition")
     plt.ylabel("Post-success dwell time (seconds)")
+    plt.xticks(rotation = 45)
     plt.title(f"Post-success Dwell Time by Condition (radius = {success_radius})")
 
     plt.tight_layout()
@@ -2139,7 +2232,7 @@ def run_full_trajectory_analysis(
     )
 
     # ---------------------------------------------------------
-    # 7. NEW: Post-success dwell analysis
+    # 7. NEW: Post-success dwell analysis (box plot)
     # ---------------------------------------------------------
     print("Plotting post-success dwell time box plot...")
 
