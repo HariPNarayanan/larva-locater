@@ -2332,3 +2332,631 @@ def multi_analysis_to_pdf(df_list, labels=None, output_pdf="combined_analysis.pd
 
 
 
+def plot_behavior_summary(
+    df,
+    bin_size=100,
+    target_x=14,
+    target_y=2,
+    success_radius=2,
+    frame_col="Frame",
+    individual_col="Individual",
+    x_col="X",
+    y_col="Y",
+    condition_col="Condition",
+    genotype_col="Genotype",
+    concentration_col="Concentration",
+    collective_col="Collective",
+    starvation_col="Starvation",
+    display_labels=None   # Optional dict: {full_condition_name: short_label}
+):
+    """
+    Unified behavioral summary plot:
+        Panel A: Success Rate (± SEM)
+        Panel B: Preference Index (± SEM)
+        Panel C: Post-success Dwell Time (successful individuals only)
+
+    Features:
+    - Hierarchical ordering by Concentration → Genotype → Collective → Starvation
+    - Optional display label mapping for concise plotting
+    - Publication-ready aesthetics
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    df = df.copy()
+
+    # -----------------------------------------
+    # 1. Build hierarchical condition order
+    # -----------------------------------------
+    def build_hierarchical_condition_order(df):
+        # Rank definitions
+        unique_concs = sorted(df[concentration_col].unique())
+        concentration_rank = {c: i for i, c in enumerate(unique_concs)}
+
+        unique_genotypes = sorted(df[genotype_col].unique())
+        genotype_rank = {g: i for i, g in enumerate(unique_genotypes)}
+
+        collective_rank = {"Single": 0, "Group": 1}
+        starvation_rank = {"Fed": 0, "5h": 1}
+
+        # Deduplicate condition rows
+        condition_info = df[[condition_col, genotype_col, concentration_col,
+                             collective_col, starvation_col]].drop_duplicates()
+
+        def sort_key(row):
+            return (
+                concentration_rank[row[concentration_col]],
+                genotype_rank[row[genotype_col]],
+                collective_rank[row[collective_col]],
+                starvation_rank[row[starvation_col]]
+            )
+
+        condition_info["__sort_key"] = condition_info.apply(sort_key, axis=1)
+        ordered_conditions = condition_info.sort_values("__sort_key")[condition_col].tolist()
+        return ordered_conditions
+
+    ordered_conditions = build_hierarchical_condition_order(df)
+
+    # -----------------------------------------
+    # 2. Build color palette (Fed → 5h → Others)
+    # -----------------------------------------
+    fed_conditions = sorted(df.loc[df[starvation_col] == "Fed", condition_col].unique())
+    fiveh_conditions = sorted(df.loc[df[starvation_col] == "5h", condition_col].unique())
+    other_conditions = sorted(df.loc[~df[starvation_col].isin(["Fed","5h"]), condition_col].unique())
+
+    fed_palette = list(reversed(sns.color_palette("Oranges", max(3,len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Blues", max(3,len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens", max(3,len(other_conditions)))))
+
+    condition_colors = {}
+    for c,col in zip(fed_conditions,fed_palette): condition_colors[c]=col
+    for c,col in zip(fiveh_conditions,fiveh_palette): condition_colors[c]=col
+    for c,col in zip(other_conditions,other_palette): condition_colors[c]=col
+
+    # -----------------------------------------
+    # 3. Compute success rate per individual
+    # -----------------------------------------
+    success_records = []
+    for (cond, ind), sub in df.groupby([condition_col, individual_col]):
+        sub = sub.sort_values(frame_col)
+        inside = np.sqrt((sub[x_col]-target_x)**2 + (sub[y_col]-target_y)**2) <= success_radius
+        success_records.append({condition_col: cond, individual_col: ind, "Success": int(inside.any())})
+    success_df = pd.DataFrame(success_records)
+
+    # -----------------------------------------
+    # 4. Compute preference index per frame bin
+    # -----------------------------------------
+    pref_records = []
+    for (cond, ind), sub in df.groupby([condition_col, individual_col]):
+        sub = sub.sort_values(frame_col)
+        sub["Bin"] = (sub[frame_col] // bin_size) * bin_size
+        for bin_id, bin_df in sub.groupby("Bin"):
+            bottom = (bin_df[y_col] <= 10).sum()
+            top = (bin_df[y_col] >= 20).sum()
+            denom = bottom + top
+            pi = np.nan if denom==0 else (bottom-top)/denom
+            pref_records.append({"FrameBin": bin_id, "PreferenceIndex": pi, condition_col: cond})
+    pref_df = pd.DataFrame(pref_records)
+
+    # -----------------------------------------
+    # 5. Compute post-success dwell time
+    # -----------------------------------------
+    df["dist"] = np.sqrt((df[x_col]-target_x)**2 + (df[y_col]-target_y)**2)
+    df["inside"] = df["dist"] <= success_radius
+    dwell_records = []
+    for (cond, ind), sub in df.groupby([condition_col, individual_col]):
+        sub = sub.sort_values(frame_col)
+        inside_frames = sub.loc[sub["inside"], frame_col].values
+        if len(inside_frames)==0: continue
+        first_entry = inside_frames[0]
+        dwell = sub.loc[sub[frame_col]>=first_entry, "inside"].sum()
+        if dwell>0:
+            dwell_records.append({condition_col: cond, individual_col: ind, "DwellTime": dwell})
+    dwell_df = pd.DataFrame(dwell_records)
+
+    # -----------------------------------------
+    # 6. Apply display label mapping if provided
+    # -----------------------------------------
+    for df_plot in [success_df, pref_df, dwell_df]:
+        if display_labels is not None:
+            df_plot["PlotLabel"] = df_plot[condition_col].map(display_labels)
+        else:
+            df_plot["PlotLabel"] = df_plot[condition_col]
+
+    # -----------------------------------------
+    # 7. Plotting
+    # -----------------------------------------
+    sns.set_style("white")
+    plt.rcParams.update({"font.size":11, "axes.spines.top":False, "axes.spines.right":False})
+    fig, axes = plt.subplots(1,3,figsize=(18,6))
+
+    # Panel A: Success Rate
+    sns.barplot(
+        data=success_df,
+        x="PlotLabel",
+        y="Success",
+        order=[display_labels[c] for c in ordered_conditions] if display_labels else ordered_conditions,
+        palette=condition_colors,
+        estimator=np.mean,
+        errorbar="se",
+        ax=axes[0]
+    )
+    axes[0].set_ylim(0,1)
+    axes[0].set_title("Success Rate")
+    axes[0].set_ylabel("Proportion successful (± SEM)")
+    axes[0].set_xlabel("Condition")
+    axes[0].tick_params(axis='x', rotation=45)
+
+    # Panel B: Preference Index
+    sns.pointplot(
+        data=pref_df,
+        x="FrameBin",
+        y="PreferenceIndex",
+        hue="PlotLabel",
+        hue_order=[display_labels[c] for c in ordered_conditions] if display_labels else ordered_conditions,
+        palette=condition_colors,
+        errorbar="se",
+        dodge=True,
+        ax=axes[1]
+    )
+    axes[1].axhline(0, linestyle="--", color="black", linewidth=1)
+    axes[1].set_title("Preference Index Over Time")
+    axes[1].set_ylabel("Preference Index (Z1 − Z3)")
+    axes[1].legend(title="Condition", bbox_to_anchor=(1.05,1))
+
+    # Panel C: Dwell Time
+    if not dwell_df.empty:
+        sns.boxplot(
+            data=dwell_df,
+            x="PlotLabel",
+            y="DwellTime",
+            order=[display_labels[c] for c in ordered_conditions] if display_labels else ordered_conditions,
+            palette=condition_colors,
+            showfliers=False,
+            ax=axes[2]
+        )
+        sns.stripplot(
+            data=dwell_df,
+            x="PlotLabel",
+            y="DwellTime",
+            order=[display_labels[c] for c in ordered_conditions] if display_labels else ordered_conditions,
+            palette=condition_colors,
+            jitter=True,
+            size=5,
+            alpha=0.7,
+            edgecolor="black",
+            linewidth=0.5,
+            ax=axes[2]
+        )
+    axes[2].set_title("Post-Success Dwell Time")
+    axes[2].set_ylabel("Frames inside after first entry")
+    axes[2].set_xlabel("Condition")
+    axes[2].tick_params(axis='x', rotation=45)
+    
+
+    plt.tight_layout()
+    plt.show()
+
+    return success_df, pref_df, dwell_df
+
+def plot_final_preferenceindex_paired(
+    df,
+    frame_range=None,          # <-- NEW (start_frame, end_frame)
+    last_n_frames=None,        # optional alternative
+    frame_col="Frame",
+    individual_col="Individual",
+    trial_col="Trial",
+    y_col="Y",
+    condition_col="Condition",
+    genotype_col="Genotype",
+    concentration_col="Concentration",
+    collective_col="Collective",
+    starvation_col="Starvation",
+    pair_labels=None
+):
+    """
+    Compares Fed vs 5h preference index within a specified frame window,
+    using per-trial averages as the statistical unit.
+
+    You must provide either:
+        - frame_range=(start, end)
+        OR
+        - last_n_frames=int
+
+    Hierarchy:
+        Concentration → Genotype → Collective
+    Within each pair:
+        Fed vs 5h (hue)
+    """
+
+    import numpy as np
+    import pandas as pd
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    df = df.copy()
+
+    # -----------------------------------------------------
+    # 0. Validate time window input
+    # -----------------------------------------------------
+    if frame_range is None and last_n_frames is None:
+        raise ValueError("Provide either frame_range or last_n_frames.")
+
+    if frame_range is not None and last_n_frames is not None:
+        raise ValueError("Provide only one of frame_range OR last_n_frames.")
+
+    # -----------------------------------------------------
+    # 1. Compute preference index per individual
+    # -----------------------------------------------------
+    pref_records = []
+
+    for (cond, trial, ind), sub in df.groupby(
+        [condition_col, trial_col, individual_col]
+    ):
+        sub = sub.sort_values(frame_col)
+
+        if frame_range is not None:
+            start, end = frame_range
+            sub_window = sub[(sub[frame_col] >= start) &
+                             (sub[frame_col] <= end)]
+        else:
+            sub_window = sub.tail(last_n_frames)
+
+        if sub_window.empty:
+            continue
+
+        bottom = (sub_window[y_col] <= 10).sum()
+        top = (sub_window[y_col] >= 20).sum()
+        denom = bottom + top
+
+        pi = np.nan if denom == 0 else (bottom - top) / denom
+
+        pref_records.append({
+            condition_col: cond,
+            trial_col: trial,
+            individual_col: ind,
+            "PreferenceIndex": pi
+        })
+
+    pref_individual_df = pd.DataFrame(pref_records)
+
+    # -----------------------------------------------------
+    # 2. Average per trial
+    # -----------------------------------------------------
+    pref_trial_df = (
+        pref_individual_df
+        .groupby([condition_col, trial_col])["PreferenceIndex"]
+        .mean()
+        .reset_index()
+    )
+
+    # -----------------------------------------------------
+    # 3. Merge metadata
+    # -----------------------------------------------------
+    metadata_cols = [
+        condition_col,
+        genotype_col,
+        concentration_col,
+        collective_col,
+        starvation_col
+    ]
+
+    meta = df[metadata_cols].drop_duplicates()
+    pref_trial_df = pref_trial_df.merge(meta, on=condition_col, how="left")
+
+    # -----------------------------------------------------
+    # 4. Build pairing key (without starvation)
+    # -----------------------------------------------------
+    pref_trial_df["PairKey"] = list(zip(
+        pref_trial_df[concentration_col],
+        pref_trial_df[genotype_col],
+        pref_trial_df[collective_col]
+    ))
+
+    # -----------------------------------------------------
+    # 5. Hierarchical ordering
+    # -----------------------------------------------------
+    unique_pairs = (
+        pref_trial_df[[concentration_col, genotype_col, collective_col]]
+        .drop_duplicates()
+    )
+
+    unique_concs = sorted(pref_trial_df[concentration_col].unique())
+    conc_rank = {c: i for i, c in enumerate(unique_concs)}
+
+    unique_genotypes = sorted(pref_trial_df[genotype_col].unique())
+    geno_rank = {g: i for i, g in enumerate(unique_genotypes)}
+
+    collective_rank = {"Single": 0, "Group": 1}
+
+    def sort_key(row):
+        return (
+            conc_rank[row[concentration_col]],
+            geno_rank[row[genotype_col]],
+            collective_rank[row[collective_col]]
+        )
+
+    unique_pairs["__sort"] = unique_pairs.apply(sort_key, axis=1)
+
+    ordered_pairs = list(
+        unique_pairs.sort_values("__sort")
+        .apply(lambda r: (r[concentration_col], r[genotype_col], r[collective_col]), axis=1)
+    )
+
+    # -----------------------------------------------------
+    # 6. Assign display labels
+    # -----------------------------------------------------
+    if pair_labels is not None:
+        pref_trial_df["PairLabel"] = pref_trial_df["PairKey"].map(pair_labels)
+        x_order = [pair_labels[p] for p in ordered_pairs]
+    else:
+        pref_trial_df["PairLabel"] = pref_trial_df["PairKey"].astype(str)
+        x_order = ordered_pairs
+
+    # -----------------------------------------------------
+    # 7. Palette (Fed vs 5h consistent)
+    # -----------------------------------------------------
+    palette = {
+        "Fed": sns.color_palette("Oranges", 3)[-1],
+        "5h": sns.color_palette("Blues", 3)[-1]
+    }
+
+    pref_trial_df[starvation_col] = (
+    pref_trial_df[starvation_col]
+    .astype(str)
+    .str.strip()
+    )
+
+    pref_trial_df[starvation_col] = pd.Categorical(
+        pref_trial_df[starvation_col],
+        categories=["Fed", "5h"],
+        ordered=True
+    )
+
+    # -----------------------------------------------------
+    # 8. Plot
+    # -----------------------------------------------------
+
+    sns.set_style("white")
+    plt.rcParams.update({
+        "font.size": 11,
+        "axes.spines.top": False,
+        "axes.spines.right": False
+    })
+
+    plt.figure(figsize=(12, 6))
+
+
+
+    sns.boxplot(
+        data=pref_trial_df,
+        x="PairLabel",
+        y="PreferenceIndex",
+        hue=starvation_col,
+        order=x_order,
+        palette=palette,
+        showfliers=False,
+        hue_order = ["Fed", "5h"]    
+    )
+
+    sns.stripplot(
+        data=pref_trial_df,
+        x="PairLabel",
+        y="PreferenceIndex",
+        hue=starvation_col,
+        order=x_order,
+        palette=palette,
+        dodge=True,
+        jitter=True,
+        alpha=0.7,
+        edgecolor="black",
+        linewidth=0.5,    
+        hue_order = ["Fed", "5h"]
+    )
+
+    plt.axhline(0, linestyle="--", color="black", linewidth=1)
+
+    if frame_range:
+        plt.ylabel(f"Preference Index (frames {frame_range[0]}–{frame_range[1]}, trial mean)")
+    else:
+        plt.ylabel(f"Preference Index (last {last_n_frames} frames, trial mean)")
+
+    plt.xlabel("")
+    plt.xticks(rotation=45)
+
+    plt.legend(title="Starvation", bbox_to_anchor=(1.05,1))
+    plt.tight_layout()
+    plt.show()
+
+    return pref_trial_df
+
+def plot_preferenceindex_paired_hierarchical_matplotlib(
+    df,
+    frame_range,
+    frame_col="Frame",
+    individual_col="Individual",
+    trial_col="Trial",
+    y_col="Y",
+    condition_col="Condition",
+    genotype_col="Genotype",
+    odour_col="Odour",
+    collective_col="Collective",
+    concentration_col="Concentration",
+    starvation_col="Starvation"
+):
+    """
+    Hierarchical paired matplotlib boxplot.
+
+    Groups by:
+        Genotype, Odour, Collective, Concentration
+
+    Within each group:
+        Conditions differing only in Starvation are plotted side-by-side.
+
+    Colors strictly follow authoritative palette logic.
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    df = df.copy()
+    start, end = frame_range
+
+    # --------------------------------------------------
+    # 1. Compute per-individual PI
+    # --------------------------------------------------
+    records = []
+
+    for (cond, trial, ind), sub in df.groupby(
+        [condition_col, trial_col, individual_col]
+    ):
+        sub = sub[(sub[frame_col] >= start) & (sub[frame_col] <= end)]
+        if sub.empty:
+            continue
+
+        bottom = (sub[y_col] <= 10).sum()
+        top = (sub[y_col] >= 20).sum()
+        denom = bottom + top
+        pi = np.nan if denom == 0 else (bottom - top) / denom
+
+        records.append({
+            condition_col: cond,
+            trial_col: trial,
+            genotype_col: sub[genotype_col].iloc[0],
+            odour_col: sub[odour_col].iloc[0],
+            collective_col: sub[collective_col].iloc[0],
+            concentration_col: sub[concentration_col].iloc[0],
+            starvation_col: sub[starvation_col].iloc[0],
+            "PreferenceIndex": pi
+        })
+
+    pi_df = pd.DataFrame(records)
+
+    # --------------------------------------------------
+    # 2. Per-trial averages
+    # --------------------------------------------------
+    pi_trial = (
+        pi_df
+        .groupby(
+            [condition_col, trial_col,
+             genotype_col, odour_col,
+             collective_col, concentration_col,
+             starvation_col]
+        )["PreferenceIndex"]
+        .mean()
+        .reset_index()
+    )
+
+    # --------------------------------------------------
+    # 3. Build authoritative palette
+    # --------------------------------------------------
+    conditions = pi_trial[condition_col].unique()
+
+    fed_conditions = sorted([c for c in conditions if "Fed" in str(c)])
+    fiveh_conditions = sorted([c for c in conditions if "5h" in str(c)])
+    other_conditions = sorted(
+        [c for c in conditions if "Fed" not in str(c) and "5h" not in str(c)]
+    )
+
+    fed_palette = list(reversed(
+        sns.color_palette("Oranges", n_colors=max(3, len(fed_conditions)))
+    ))
+    fiveh_palette = list(reversed(
+        sns.color_palette("Blues", n_colors=max(3, len(fiveh_conditions)))
+    ))
+    other_palette = list(reversed(
+        sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))
+    ))
+
+    palette = {}
+    for c, col in zip(fed_conditions, fed_palette):
+        palette[c] = col
+    for c, col in zip(fiveh_conditions, fiveh_palette):
+        palette[c] = col
+    for c, col in zip(other_conditions, other_palette):
+        palette[c] = col
+
+    # --------------------------------------------------
+    # 4. Build pairing groups
+    # --------------------------------------------------
+    group_cols = [
+        genotype_col, odour_col,
+        collective_col, concentration_col
+    ]
+
+    grouped = (
+        pi_trial
+        .groupby(group_cols)
+    )
+
+    fig, ax = plt.subplots(figsize=(12,5))
+
+    box_width = 0.22
+    pair_spacing = 0.55
+
+    current_x = 0
+    xticks = []
+    xticklabels = []
+
+    for group_key, sub in sorted(grouped):
+
+        # Sort conditions automatically
+        sub = sub.sort_values(condition_col)
+
+        conds = sub[condition_col].unique()
+
+        if len(conds) < 2:
+            continue  # skip incomplete pairs
+
+        left_x = current_x - box_width/2
+        right_x = current_x + box_width/2
+
+        for cond, x_pos in zip(conds, [left_x, right_x]):
+
+            vals = sub[
+                sub[condition_col] == cond
+            ]["PreferenceIndex"]
+
+            bp = ax.boxplot(
+                vals,
+                positions=[x_pos],
+                widths=box_width,
+                patch_artist=True,
+                showfliers=False
+            )
+
+            bp["boxes"][0].set_facecolor(
+                palette.get(cond, "grey")
+            )
+            bp["boxes"][0].set_alpha(0.9)
+
+        xticks.append(current_x)
+        xticklabels.append(
+            f"{group_key[0]}\n{group_key[3]}"
+        )
+
+        current_x += pair_spacing
+
+    # --------------------------------------------------
+    # 5. Formatting
+    # --------------------------------------------------
+    ax.axhline(0, linestyle="--", linewidth=1, color="black")
+
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xticklabels, rotation=45, ha="right")
+
+    ax.set_ylabel("Preference Index")
+    ax.set_ylim(-1, 1)
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    plt.tight_layout()
+    plt.show()
+
+    return pi_trial
