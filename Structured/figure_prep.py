@@ -2956,3 +2956,238 @@ def plot_preferenceindex_hierarchical_matplotlib(
     plt.show()
 
     return pi_trial
+
+def plot_behavior_summary_overtime(
+    df,
+    bin_size=100,
+    target_x=14,
+    target_y=2,
+    success_radius=2,
+    frame_col="Frame",
+    individual_col="Individual",
+    x_col="X",
+    y_col="Y",
+    condition_col="Condition",
+    genotype_col="Genotype",
+    concentration_col="Concentration",
+    collective_col="Collective",
+    starvation_col="Starvation",
+    display_labels=None,
+    condition_order=None
+    ):
+    """
+    Unified behavioral summary plot:
+        Panel A: Cumulative Success Rate over time (± SEM across individuals)
+        Panel B: Preference Index (± SEM)
+        Panel C: Post-success Dwell Time (successful individuals only)
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    df = df.copy()
+
+    # -----------------------------------------
+    # 1. Build hierarchical condition order
+    # -----------------------------------------
+    def build_hierarchical_condition_order(df):
+        unique_concs = sorted(df[concentration_col].unique())
+        concentration_rank = {c: i for i, c in enumerate(unique_concs)}
+        unique_genotypes = sorted(df[genotype_col].unique())
+        genotype_rank = {g: i for i, g in enumerate(unique_genotypes)}
+        collective_rank = {"Single": 0, "Group": 1}
+        starvation_rank = {"Fed": 0, "5h": 1}
+
+        condition_info = df[[condition_col, genotype_col, concentration_col,
+                             collective_col, starvation_col]].drop_duplicates()
+
+        def sort_key(row):
+            return (
+                concentration_rank[row[concentration_col]],
+                genotype_rank[row[genotype_col]],
+                collective_rank.get(row[collective_col], 99),
+                starvation_rank.get(row[starvation_col], 99)
+            )
+
+        condition_info["__sort_key"] = condition_info.apply(sort_key, axis=1)
+        return condition_info.sort_values("__sort_key")[condition_col].tolist()
+
+    if condition_order is not None:
+        ordered_conditions = condition_order
+    else:
+        ordered_conditions = build_hierarchical_condition_order(df)
+
+    # -----------------------------------------
+    # 2. Build color palette
+    # -----------------------------------------
+    fed_conditions   = sorted(df.loc[df[starvation_col] == "Fed", condition_col].unique())
+    fiveh_conditions = sorted(df.loc[df[starvation_col] == "5h",  condition_col].unique())
+    other_conditions = sorted(df.loc[~df[starvation_col].isin(["Fed","5h"]), condition_col].unique())
+
+    fed_palette   = list(reversed(sns.color_palette("Oranges", max(3, len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Blues",   max(3, len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens",  max(3, len(other_conditions)))))
+
+    condition_colors = {}
+    for c, col in zip(fed_conditions,   fed_palette):   condition_colors[c] = col
+    for c, col in zip(fiveh_conditions, fiveh_palette): condition_colors[c] = col
+    for c, col in zip(other_conditions, other_palette): condition_colors[c] = col
+
+    # -----------------------------------------
+    # 3. Compute per-individual first-success frame
+    # -----------------------------------------
+    df["dist"]   = np.sqrt((df[x_col] - target_x)**2 + (df[y_col] - target_y)**2)
+    df["inside"] = df["dist"] <= success_radius
+
+    first_success = {}
+    for (cond, ind), sub in df.groupby([condition_col, individual_col]):
+        sub = sub.sort_values(frame_col)
+        hits = sub.loc[sub["inside"], frame_col]
+        first_success[(cond, ind)] = hits.iloc[0] if len(hits) > 0 else np.inf
+
+    # -----------------------------------------
+    # 4. Build cumulative success rate per bin
+    # -----------------------------------------
+    all_frames  = sorted(df[frame_col].unique())
+    frame_bins  = sorted({(f // bin_size) * bin_size for f in all_frames})
+
+    cumul_records = []
+    for cond in ordered_conditions:
+        ind_list = df.loc[df[condition_col] == cond, individual_col].unique()
+        n_total  = len(ind_list)
+        fs_vals  = np.array([first_success[(cond, ind)] for ind in ind_list])
+
+        for bin_start in frame_bins:
+            bin_end  = bin_start + bin_size          # exclusive upper edge
+            # proportion of individuals that succeeded strictly before this bin ends
+            successes = (fs_vals < bin_end).astype(float)
+            cumul_records.append({
+                condition_col: cond,
+                "FrameBin":    bin_start,
+                "CumulSuccess": successes.mean(),
+                "SEM":         successes.std(ddof=0) / np.sqrt(n_total) if n_total > 1 else 0.0,
+            })
+
+    cumul_df = pd.DataFrame(cumul_records)
+
+    # apply display labels
+    for col_name in ["PlotLabel"]:
+        cumul_df[col_name] = (
+            cumul_df[condition_col].map(display_labels)
+            if display_labels else cumul_df[condition_col]
+        )
+
+    # -----------------------------------------
+    # 5. Compute preference index per frame bin
+    # -----------------------------------------
+    pref_records = []
+    for (cond, ind), sub in df.groupby([condition_col, individual_col]):
+        sub = sub.sort_values(frame_col)
+        sub = sub.copy()
+        sub["Bin"] = (sub[frame_col] // bin_size) * bin_size
+        for bin_id, bin_df in sub.groupby("Bin"):
+            bottom = (bin_df[y_col] <= 10).sum()
+            top    = (bin_df[y_col] >= 20).sum()
+            denom  = bottom + top
+            pi     = np.nan if denom == 0 else (bottom - top) / denom
+            pref_records.append({"FrameBin": bin_id, "PreferenceIndex": pi, condition_col: cond})
+    pref_df = pd.DataFrame(pref_records)
+
+    # -----------------------------------------
+    # 6. Compute post-success dwell time
+    # -----------------------------------------
+    dwell_records = []
+    for (cond, ind), sub in df.groupby([condition_col, individual_col]):
+        sub = sub.sort_values(frame_col)
+        inside_frames = sub.loc[sub["inside"], frame_col].values
+        if len(inside_frames) == 0:
+            continue
+        first_entry = inside_frames[0]
+        dwell = sub.loc[sub[frame_col] >= first_entry, "inside"].sum()
+        if dwell > 0:
+            dwell_records.append({condition_col: cond, individual_col: ind, "DwellTime": dwell})
+    dwell_df = pd.DataFrame(dwell_records)
+
+    # -----------------------------------------
+    # 7. Apply display labels to pref & dwell dfs
+    # -----------------------------------------
+    for df_plot in [pref_df, dwell_df]:
+        df_plot["PlotLabel"] = (
+            df_plot[condition_col].map(display_labels)
+            if display_labels else df_plot[condition_col]
+        )
+
+    label_order = (
+        [display_labels[c] for c in ordered_conditions]
+        if display_labels else ordered_conditions
+    )
+
+    # -----------------------------------------
+    # 8. Plotting
+    # -----------------------------------------
+    sns.set_style("white")
+    plt.rcParams.update({"font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    # ------ Panel A: Cumulative Success Rate over time ------
+    ax = axes[0]
+    for cond in ordered_conditions:
+        label  = display_labels[cond] if display_labels else cond
+        subset = cumul_df[cumul_df[condition_col] == cond].sort_values("FrameBin")
+        color  = condition_colors[cond]
+        ax.plot(subset["FrameBin"], subset["CumulSuccess"], color=color, label=label, linewidth=1.8)
+        ax.fill_between(
+            subset["FrameBin"],
+            subset["CumulSuccess"] - subset["SEM"],
+            subset["CumulSuccess"] + subset["SEM"],
+            color=color, alpha=0.2
+        )
+
+    ax.set_ylim(0, 1)
+    ax.set_title("Cumulative Success Rate")
+    ax.set_xlabel("Frame")
+    ax.set_ylabel("Proportion successful (± SEM)")
+    ax.legend(title="Condition", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
+    ax.axhline(1.0, linestyle=":", color="gray", linewidth=0.8)   # saturation reference
+
+    # ------ Panel B: Preference Index ------
+    sns.pointplot(
+        data=pref_df,
+        x="FrameBin",
+        y="PreferenceIndex",
+        hue="PlotLabel",
+        hue_order=label_order,
+        palette=condition_colors,
+        errorbar="se",
+        dodge=True,
+        ax=axes[1]
+    )
+    axes[1].axhline(0, linestyle="--", color="black", linewidth=1)
+    axes[1].set_title("Preference Index Over Time")
+    axes[1].set_ylabel("Preference Index (Z1 − Z3)")
+    axes[1].legend(title="Condition", bbox_to_anchor=(1.05, 1))
+
+    # ------ Panel C: Dwell Time ------
+    if not dwell_df.empty:
+        sns.boxplot(
+            data=dwell_df, x="PlotLabel", y="DwellTime",
+            order=label_order, palette=condition_colors,
+            showfliers=False, ax=axes[2]
+        )
+        sns.stripplot(
+            data=dwell_df, x="PlotLabel", y="DwellTime",
+            order=label_order, palette=condition_colors,
+            jitter=True, size=5, alpha=0.7,
+            edgecolor="black", linewidth=0.5, ax=axes[2]
+        )
+    axes[2].set_title("Post-Success Dwell Time")
+    axes[2].set_ylabel("Frames inside after first entry")
+    axes[2].set_xlabel("Condition")
+    axes[2].tick_params(axis='x', rotation=45)
+
+    plt.tight_layout()
+    plt.show()
+
+    return cumul_df, pref_df, dwell_df
