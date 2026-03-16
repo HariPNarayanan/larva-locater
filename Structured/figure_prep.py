@@ -2347,8 +2347,9 @@ def plot_behavior_summary(
     concentration_col="Concentration",
     collective_col="Collective",
     starvation_col="Starvation",
-    display_labels=None   # Optional dict: {full_condition_name: short_label}
-):
+    display_labels=None,   # Optional dict: {full_condition_name: short_label}
+    condition_order=None
+    ):
     """
     Unified behavioral summary plot:
         Panel A: Success Rate (± SEM)
@@ -2398,7 +2399,10 @@ def plot_behavior_summary(
         ordered_conditions = condition_info.sort_values("__sort_key")[condition_col].tolist()
         return ordered_conditions
 
-    ordered_conditions = build_hierarchical_condition_order(df)
+    if condition_order is not None:
+        ordered_conditions = condition_order
+    else:
+        ordered_conditions = build_hierarchical_condition_order(df)
 
     # -----------------------------------------
     # 2. Build color palette (Fed → 5h → Others)
@@ -2773,48 +2777,48 @@ def plot_final_preferenceindex_paired(
 
     return pref_trial_df
 
-def plot_preferenceindex_paired_hierarchical_matplotlib(
+def plot_preferenceindex_hierarchical_matplotlib(
     df,
     frame_range,
     frame_col="Frame",
     individual_col="Individual",
     trial_col="Trial",
     y_col="Y",
-    condition_col="Condition",
     genotype_col="Genotype",
-    odour_col="Odour",
-    collective_col="Collective",
     concentration_col="Concentration",
-    starvation_col="Starvation"
+    collective_col="Collective",
+    starvation_col="Starvation",
+    pair_labels=None
 ):
     """
-    Hierarchical paired matplotlib boxplot.
+    Hierarchical matplotlib boxplot.
 
-    Groups by:
-        Genotype, Odour, Collective, Concentration
+    X hierarchy:
+        Concentration → Genotype → Collective
 
-    Within each group:
-        Conditions differing only in Starvation are plotted side-by-side.
+    Within each condition:
+        Fed vs 5h (paired, side-by-side)
 
-    Colors strictly follow authoritative palette logic.
+    Uses per-trial averages.
     """
 
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
-    import seaborn as sns
+    from matplotlib.patches import Patch
 
     df = df.copy()
     start, end = frame_range
 
     # --------------------------------------------------
-    # 1. Compute per-individual PI
+    # 1. Compute per-individual PI in frame window
     # --------------------------------------------------
     records = []
 
     for (cond, trial, ind), sub in df.groupby(
-        [condition_col, trial_col, individual_col]
+        ["Condition", trial_col, individual_col]
     ):
+
         sub = sub[(sub[frame_col] >= start) & (sub[frame_col] <= end)]
         if sub.empty:
             continue
@@ -2825,136 +2829,128 @@ def plot_preferenceindex_paired_hierarchical_matplotlib(
         pi = np.nan if denom == 0 else (bottom - top) / denom
 
         records.append({
-            condition_col: cond,
+            "Condition": cond,
             trial_col: trial,
-            genotype_col: sub[genotype_col].iloc[0],
-            odour_col: sub[odour_col].iloc[0],
-            collective_col: sub[collective_col].iloc[0],
-            concentration_col: sub[concentration_col].iloc[0],
             starvation_col: sub[starvation_col].iloc[0],
+            genotype_col: sub[genotype_col].iloc[0],
+            concentration_col: sub[concentration_col].iloc[0],
+            collective_col: sub[collective_col].iloc[0],
             "PreferenceIndex": pi
         })
 
     pi_df = pd.DataFrame(records)
 
     # --------------------------------------------------
-    # 2. Per-trial averages
+    # 2. Per-trial average
     # --------------------------------------------------
     pi_trial = (
         pi_df
         .groupby(
-            [condition_col, trial_col,
-             genotype_col, odour_col,
-             collective_col, concentration_col,
-             starvation_col]
+            ["Condition", trial_col, starvation_col,
+             genotype_col, concentration_col, collective_col]
         )["PreferenceIndex"]
         .mean()
         .reset_index()
     )
 
     # --------------------------------------------------
-    # 3. Build authoritative palette
+    # 3. Hierarchical ordering
     # --------------------------------------------------
-    conditions = pi_trial[condition_col].unique()
-
-    fed_conditions = sorted([c for c in conditions if "Fed" in str(c)])
-    fiveh_conditions = sorted([c for c in conditions if "5h" in str(c)])
-    other_conditions = sorted(
-        [c for c in conditions if "Fed" not in str(c) and "5h" not in str(c)]
+    unique_conditions = (
+        pi_trial[
+            [concentration_col, genotype_col, collective_col]
+        ]
+        .drop_duplicates()
+        .sort_values([concentration_col, genotype_col, collective_col])
     )
 
-    fed_palette = list(reversed(
-        sns.color_palette("Oranges", n_colors=max(3, len(fed_conditions)))
-    ))
-    fiveh_palette = list(reversed(
-        sns.color_palette("Blues", n_colors=max(3, len(fiveh_conditions)))
-    ))
-    other_palette = list(reversed(
-        sns.color_palette("Greens", n_colors=max(3, len(other_conditions)))
-    ))
-
-    palette = {}
-    for c, col in zip(fed_conditions, fed_palette):
-        palette[c] = col
-    for c, col in zip(fiveh_conditions, fiveh_palette):
-        palette[c] = col
-    for c, col in zip(other_conditions, other_palette):
-        palette[c] = col
+    ordered_conditions = unique_conditions.to_dict("records")
 
     # --------------------------------------------------
-    # 4. Build pairing groups
+    # 4. Manual positioning
     # --------------------------------------------------
-    group_cols = [
-        genotype_col, odour_col,
-        collective_col, concentration_col
-    ]
+    fig, ax = plt.subplots(figsize=(10,5))
 
-    grouped = (
-        pi_trial
-        .groupby(group_cols)
-    )
+    box_width = 0.25
+    group_spacing = 0.7
 
-    fig, ax = plt.subplots(figsize=(12,5))
-
-    box_width = 0.22
-    pair_spacing = 0.55
+    positions = []
+    data_to_plot = []
+    x_labels = []
 
     current_x = 0
-    xticks = []
-    xticklabels = []
 
-    for group_key, sub in sorted(grouped):
+    for cond in ordered_conditions:
 
-        # Sort conditions automatically
-        sub = sub.sort_values(condition_col)
+        conc = cond[concentration_col]
+        geno = cond[genotype_col]
+        coll = cond[collective_col]
 
-        conds = sub[condition_col].unique()
+        subset = pi_trial[
+            (pi_trial[concentration_col] == conc) &
+            (pi_trial[genotype_col] == geno) &
+            (pi_trial[collective_col] == coll)
+        ]
 
-        if len(conds) < 2:
-            continue  # skip incomplete pairs
+        fed_vals = subset[subset[starvation_col] == "Fed"]["PreferenceIndex"]
+        starved_vals = subset[subset[starvation_col] == "5h"]["PreferenceIndex"]
 
-        left_x = current_x - box_width/2
-        right_x = current_x + box_width/2
+        positions.extend([
+            current_x - box_width/2,
+            current_x + box_width/2
+        ])
 
-        for cond, x_pos in zip(conds, [left_x, right_x]):
+        data_to_plot.extend([fed_vals, starved_vals])
 
-            vals = sub[
-                sub[condition_col] == cond
-            ]["PreferenceIndex"]
+        if pair_labels:
+            x_labels.append(pair_labels.get(
+                (conc, geno, coll),
+                f"{geno} {conc} {coll}"
+            ))
+        else:
+            x_labels.append(f"{geno}\n{conc}\n{coll}")
 
-            bp = ax.boxplot(
-                vals,
-                positions=[x_pos],
-                widths=box_width,
-                patch_artist=True,
-                showfliers=False
-            )
-
-            bp["boxes"][0].set_facecolor(
-                palette.get(cond, "grey")
-            )
-            bp["boxes"][0].set_alpha(0.9)
-
-        xticks.append(current_x)
-        xticklabels.append(
-            f"{group_key[0]}\n{group_key[3]}"
-        )
-
-        current_x += pair_spacing
+        current_x += group_spacing
 
     # --------------------------------------------------
-    # 5. Formatting
+    # 5. Draw boxplots
+    # --------------------------------------------------
+    bp = ax.boxplot(
+        data_to_plot,
+        positions=positions,
+        widths=box_width,
+        patch_artist=True,
+        showfliers=False
+    )
+
+    # Orange = Fed, Blue = 5h
+    colors = ["#E69F00", "#0072B2"]
+
+    for i, patch in enumerate(bp["boxes"]):
+        patch.set_facecolor(colors[i % 2])
+        patch.set_alpha(0.85)
+
+    # --------------------------------------------------
+    # 6. Formatting
     # --------------------------------------------------
     ax.axhline(0, linestyle="--", linewidth=1, color="black")
 
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(xticklabels, rotation=45, ha="right")
+    ax.set_xticks(
+        [i * group_spacing for i in range(len(x_labels))]
+    )
+    ax.set_xticklabels(x_labels, rotation=45, ha="right")
 
     ax.set_ylabel("Preference Index")
     ax.set_ylim(-1, 1)
 
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+
+    legend_elements = [
+        Patch(facecolor=colors[0], label="Fed"),
+        Patch(facecolor=colors[1], label="5h")
+    ]
+    ax.legend(handles=legend_elements, frameon=False)
 
     plt.tight_layout()
     plt.show()
