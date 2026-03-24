@@ -3191,3 +3191,405 @@ def plot_behavior_summary_overtime(
     plt.show()
 
     return cumul_df, pref_df, dwell_df
+
+def plot_speed_boxplot(
+    df,
+    speed_col="Speed",
+    condition_col="Condition",
+    genotype_col="Genotype",
+    concentration_col="Concentration",
+    collective_col="Collective",
+    starvation_col="Starvation",
+    display_labels=None,
+    condition_order=None,
+    min_speed=0.5,
+    max_speed=2.0
+):
+    """
+    Boxplot of Speed across conditions with hard cutoff filtering.
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    df = df.copy()
+
+    # -----------------------------------------
+    # 0. Apply hard cutoff filter
+    # -----------------------------------------
+    df = df[(df[speed_col] >= min_speed) & (df[speed_col] <= max_speed)]
+
+    # -----------------------------------------
+    # 1. Build hierarchical condition order
+    # -----------------------------------------
+    def build_hierarchical_condition_order(df):
+        unique_concs = sorted(df[concentration_col].unique())
+        concentration_rank = {c: i for i, c in enumerate(unique_concs)}
+
+        unique_genotypes = sorted(df[genotype_col].unique())
+        genotype_rank = {g: i for i, g in enumerate(unique_genotypes)}
+
+        collective_rank = {"Single": 0, "Group": 1}
+        starvation_rank = {"Fed": 0, "5h": 1}
+
+        condition_info = df[[condition_col, genotype_col, concentration_col,
+                             collective_col, starvation_col]].drop_duplicates()
+
+        def sort_key(row):
+            return (
+                concentration_rank[row[concentration_col]],
+                genotype_rank[row[genotype_col]],
+                collective_rank.get(row[collective_col], 99),
+                starvation_rank.get(row[starvation_col], 99)
+            )
+
+        condition_info["__sort_key"] = condition_info.apply(sort_key, axis=1)
+        return condition_info.sort_values("__sort_key")[condition_col].tolist()
+
+    if condition_order is not None:
+        ordered_conditions = condition_order
+    else:
+        ordered_conditions = build_hierarchical_condition_order(df)
+
+    # -----------------------------------------
+    # 2. Build color palette
+    # -----------------------------------------
+    fed_conditions   = sorted(df.loc[df[starvation_col] == "Fed", condition_col].unique())
+    fiveh_conditions = sorted(df.loc[df[starvation_col] == "5h",  condition_col].unique())
+    other_conditions = sorted(df.loc[~df[starvation_col].isin(["Fed","5h"]), condition_col].unique())
+
+    fed_palette   = list(reversed(sns.color_palette("Oranges", max(3, len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Blues",   max(3, len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens",  max(3, len(other_conditions)))))
+
+    condition_colors = {}
+    for c, col in zip(fed_conditions,   fed_palette):   condition_colors[c] = col
+    for c, col in zip(fiveh_conditions, fiveh_palette): condition_colors[c] = col
+    for c, col in zip(other_conditions, other_palette): condition_colors[c] = col
+
+    # -----------------------------------------
+    # 3. Labels
+    # -----------------------------------------
+    df["PlotLabel"] = (
+        df[condition_col].map(display_labels)
+        if display_labels else df[condition_col]
+    )
+
+    label_order = (
+        [display_labels[c] for c in ordered_conditions]
+        if display_labels else ordered_conditions
+    )
+
+    # -----------------------------------------
+    # 4. Plot
+    # -----------------------------------------
+    sns.set_style("white")
+    plt.rcParams.update({
+        "font.size": 11,
+        "axes.spines.top": False,
+        "axes.spines.right": False
+    })
+
+    plt.figure(figsize=(8, 6))
+
+    sns.boxplot(
+        data=df,
+        x="PlotLabel",
+        y=speed_col,
+        order=label_order,
+        palette=condition_colors,
+        showfliers=False
+    )
+
+
+    plt.title(f"Speed Across Conditions ({min_speed}–{max_speed} filtered)")
+    plt.ylabel("Speed")
+    plt.xlabel("Condition")
+    plt.xticks(rotation=45)
+
+    plt.tight_layout()
+    plt.show()
+
+    return df
+
+def plot_speed_binned_boxplot(
+    df,
+    speed_col="Speed",
+    frame_col="Frame",
+    individual_col="Individual",
+    condition_col="Condition",
+    genotype_col="Genotype",
+    concentration_col="Concentration",
+    collective_col="Collective",
+    starvation_col="Starvation",
+    bin_size=30,
+    min_speed=0.5,
+    max_speed=2.0,
+    display_labels=None,
+    condition_order=None
+):
+    """
+    Boxplot of speed using per-individual averages in 30-frame bins.
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    df = df.copy()
+
+    # -----------------------------------------
+    # 0. Apply hard cutoff
+    # -----------------------------------------
+    df = df[(df[speed_col] >= min_speed) & (df[speed_col] <= max_speed)]
+
+    # -----------------------------------------
+    # 1. Build hierarchical condition order
+    # -----------------------------------------
+    def build_hierarchical_condition_order(df):
+        unique_concs = sorted(df[concentration_col].unique())
+        concentration_rank = {c: i for i, c in enumerate(unique_concs)}
+
+        unique_genotypes = sorted(df[genotype_col].unique())
+        genotype_rank = {g: i for i, g in enumerate(unique_genotypes)}
+
+        collective_rank = {"Single": 0, "Group": 1}
+        starvation_rank = {"Fed": 0, "5h": 1}
+
+        condition_info = df[[condition_col, genotype_col, concentration_col,
+                             collective_col, starvation_col]].drop_duplicates()
+
+        def sort_key(row):
+            return (
+                concentration_rank[row[concentration_col]],
+                genotype_rank[row[genotype_col]],
+                collective_rank.get(row[collective_col], 99),
+                starvation_rank.get(row[starvation_col], 99)
+            )
+
+        condition_info["__sort_key"] = condition_info.apply(sort_key, axis=1)
+        return condition_info.sort_values("__sort_key")[condition_col].tolist()
+
+    if condition_order is not None:
+        ordered_conditions = condition_order
+    else:
+        ordered_conditions = build_hierarchical_condition_order(df)
+
+    # -----------------------------------------
+    # 2. Build color palette
+    # -----------------------------------------
+    fed_conditions   = sorted(df.loc[df[starvation_col] == "Fed", condition_col].unique())
+    fiveh_conditions = sorted(df.loc[df[starvation_col] == "5h",  condition_col].unique())
+    other_conditions = sorted(df.loc[~df[starvation_col].isin(["Fed","5h"]), condition_col].unique())
+
+    fed_palette   = list(reversed(sns.color_palette("Oranges", max(3, len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Blues",   max(3, len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens",  max(3, len(other_conditions)))))
+
+    condition_colors = {}
+    for c, col in zip(fed_conditions,   fed_palette):   condition_colors[c] = col
+    for c, col in zip(fiveh_conditions, fiveh_palette): condition_colors[c] = col
+    for c, col in zip(other_conditions, other_palette): condition_colors[c] = col
+
+    # -----------------------------------------
+    # 3. Bin + average per individual
+    # -----------------------------------------
+    df["FrameBin"] = (df[frame_col] // bin_size) * bin_size
+
+    binned = (
+        df.groupby([condition_col, individual_col, "FrameBin"])[speed_col]
+        .mean()
+        .reset_index()
+    )
+
+    # -----------------------------------------
+    # 4. Labels
+    # -----------------------------------------
+    binned["PlotLabel"] = (
+        binned[condition_col].map(display_labels)
+        if display_labels else binned[condition_col]
+    )
+
+    label_order = (
+        [display_labels[c] for c in ordered_conditions]
+        if display_labels else ordered_conditions
+    )
+
+    # -----------------------------------------
+    # 5. Plot
+    # -----------------------------------------
+    sns.set_style("white")
+    plt.rcParams.update({
+        "font.size": 11,
+        "axes.spines.top": False,
+        "axes.spines.right": False
+    })
+
+    plt.figure(figsize=(12, 6))
+
+    sns.boxplot(
+        data=binned,
+        x="FrameBin",
+        y=speed_col,
+        hue="PlotLabel",
+        hue_order=label_order,
+        palette=condition_colors,
+        showfliers=False
+    )
+
+    plt.title(f"Speed (Per-Individual Mean, {bin_size}-Frame Bins)")
+    plt.xlabel("Frame Bin")
+    plt.ylabel("Speed")
+    plt.legend(title="Condition", bbox_to_anchor=(1.02, 1), loc="upper left")
+
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+    return binned
+
+def plot_stopping_frequency(
+    df,
+    speed_col="Speed",
+    frame_col="Frame",
+    individual_col="Individual",
+    condition_col="Condition",
+    genotype_col="Genotype",
+    concentration_col="Concentration",
+    collective_col="Collective",
+    starvation_col="Starvation",
+    stop_threshold=0.2,
+    min_speed=None,   # optional filtering (set to 0.5 if you want consistency)
+    max_speed=None,
+    display_labels=None,
+    condition_order=None
+):
+    """
+    Plot frequency of 'stopping' (speed < threshold) per individual across conditions.
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    df = df.copy()
+
+    # -----------------------------------------
+    # 0. Optional speed filtering
+    # -----------------------------------------
+    if min_speed is not None:
+        df = df[df[speed_col] >= min_speed]
+    if max_speed is not None:
+        df = df[df[speed_col] <= max_speed]
+
+    # -----------------------------------------
+    # 1. Define stopping
+    # -----------------------------------------
+    df["is_stopped"] = df[speed_col] < stop_threshold
+
+    # -----------------------------------------
+    # 2. Compute per-individual stopping frequency
+    # -----------------------------------------
+    stop_df = (
+        df.groupby([condition_col, individual_col])["is_stopped"]
+        .mean()
+        .reset_index()
+        .rename(columns={"is_stopped": "StopFrequency"})
+    )
+
+    # -----------------------------------------
+    # 3. Build hierarchical condition order
+    # -----------------------------------------
+    def build_hierarchical_condition_order(df):
+        unique_concs = sorted(df[concentration_col].unique())
+        concentration_rank = {c: i for i, c in enumerate(unique_concs)}
+
+        unique_genotypes = sorted(df[genotype_col].unique())
+        genotype_rank = {g: i for i, g in enumerate(unique_genotypes)}
+
+        collective_rank = {"Single": 0, "Group": 1}
+        starvation_rank = {"Fed": 0, "5h": 1}
+
+        condition_info = df[[condition_col, genotype_col, concentration_col,
+                             collective_col, starvation_col]].drop_duplicates()
+
+        def sort_key(row):
+            return (
+                concentration_rank[row[concentration_col]],
+                genotype_rank[row[genotype_col]],
+                collective_rank.get(row[collective_col], 99),
+                starvation_rank.get(row[starvation_col], 99)
+            )
+
+        condition_info["__sort_key"] = condition_info.apply(sort_key, axis=1)
+        return condition_info.sort_values("__sort_key")[condition_col].tolist()
+
+    if condition_order is not None:
+        ordered_conditions = condition_order
+    else:
+        ordered_conditions = build_hierarchical_condition_order(df)
+
+    # -----------------------------------------
+    # 4. Color palette (same logic)
+    # -----------------------------------------
+    fed_conditions   = sorted(df.loc[df[starvation_col] == "Fed", condition_col].unique())
+    fiveh_conditions = sorted(df.loc[df[starvation_col] == "5h",  condition_col].unique())
+    other_conditions = sorted(df.loc[~df[starvation_col].isin(["Fed","5h"]), condition_col].unique())
+
+    fed_palette   = list(reversed(sns.color_palette("Oranges", max(3, len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Blues",   max(3, len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens",  max(3, len(other_conditions)))))
+
+    condition_colors = {}
+    for c, col in zip(fed_conditions,   fed_palette):   condition_colors[c] = col
+    for c, col in zip(fiveh_conditions, fiveh_palette): condition_colors[c] = col
+    for c, col in zip(other_conditions, other_palette): condition_colors[c] = col
+
+    # -----------------------------------------
+    # 5. Labels
+    # -----------------------------------------
+    stop_df["PlotLabel"] = (
+        stop_df[condition_col].map(display_labels)
+        if display_labels else stop_df[condition_col]
+    )
+
+    label_order = (
+        [display_labels[c] for c in ordered_conditions]
+        if display_labels else ordered_conditions
+    )
+
+    # -----------------------------------------
+    # 6. Plot
+    # -----------------------------------------
+    sns.set_style("white")
+    plt.rcParams.update({
+        "font.size": 11,
+        "axes.spines.top": False,
+        "axes.spines.right": False
+    })
+
+    plt.figure(figsize=(8, 6))
+
+    sns.boxplot(
+        data=stop_df,
+        x="PlotLabel",
+        y="StopFrequency",
+        order=label_order,
+        palette=condition_colors,
+        showfliers=False
+    )
+
+    plt.title(f"Stopping Frequency (Speed < {stop_threshold})")
+    plt.ylabel("Fraction of Time Stopped")
+    plt.xlabel("Condition")
+    plt.ylim(0, 1)
+    plt.xticks(rotation=45)
+
+    plt.tight_layout()
+    plt.show()
+
+    return stop_df
