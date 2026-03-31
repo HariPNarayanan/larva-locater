@@ -3593,3 +3593,163 @@ def plot_stopping_frequency(
     plt.show()
 
     return stop_df
+
+def compute_central_fraction(
+    df,
+    radius=5,                 # cm
+    center_x=15,
+    center_y=15,
+    bin_size=30,              # NEW: frame binning
+    frame_col="Frame",
+    individual_col="Individual",
+    x_col="X",
+    y_col="Y",
+    condition_col="Condition",
+    genotype_col="Genotype",
+    concentration_col="Concentration",
+    collective_col="Collective",
+    starvation_col="Starvation",
+    display_labels=None,
+    condition_order=None
+):
+    """
+    Computes and plots fraction of individuals within a central radius over time.
+
+    Features:
+    - Group-size invariant (fraction per frame)
+    - Frame binning (default: 30 frames)
+    - Same hierarchical ordering + color logic as main function
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    df = df.copy()
+
+    # -----------------------------------------
+    # 1. Build hierarchical condition order
+    # -----------------------------------------
+    def build_hierarchical_condition_order(df):
+        unique_concs = sorted(df[concentration_col].unique())
+        concentration_rank = {c: i for i, c in enumerate(unique_concs)}
+
+        unique_genotypes = sorted(df[genotype_col].unique())
+        genotype_rank = {g: i for i, g in enumerate(unique_genotypes)}
+
+        collective_rank = {"Single": 0, "Group": 1}
+        starvation_rank = {"Fed": 0, "5h": 1}
+
+        condition_info = df[[condition_col, genotype_col, concentration_col,
+                             collective_col, starvation_col]].drop_duplicates()
+
+        def sort_key(row):
+            return (
+                concentration_rank[row[concentration_col]],
+                genotype_rank[row[genotype_col]],
+                collective_rank[row[collective_col]],
+                starvation_rank[row[starvation_col]]
+            )
+
+        condition_info["__sort_key"] = condition_info.apply(sort_key, axis=1)
+        return condition_info.sort_values("__sort_key")[condition_col].tolist()
+
+    if condition_order is not None:
+        ordered_conditions = condition_order
+    else:
+        ordered_conditions = build_hierarchical_condition_order(df)
+
+    # -----------------------------------------
+    # 2. Color palette (unchanged)
+    # -----------------------------------------
+    fed_conditions = sorted(df.loc[df[starvation_col] == "Fed", condition_col].unique())
+    fiveh_conditions = sorted(df.loc[df[starvation_col] == "5h", condition_col].unique())
+    other_conditions = sorted(df.loc[~df[starvation_col].isin(["Fed","5h"]), condition_col].unique())
+
+    fed_palette = list(reversed(sns.color_palette("Oranges", max(3,len(fed_conditions)))))
+    fiveh_palette = list(reversed(sns.color_palette("Blues", max(3,len(fiveh_conditions)))))
+    other_palette = list(reversed(sns.color_palette("Greens", max(3,len(other_conditions)))))
+
+    condition_colors = {}
+    for c,col in zip(fed_conditions,fed_palette): condition_colors[c]=col
+    for c,col in zip(fiveh_conditions,fiveh_palette): condition_colors[c]=col
+    for c,col in zip(other_conditions,other_palette): condition_colors[c]=col
+
+    # -----------------------------------------
+    # 3. Compute inside-center per frame
+    # -----------------------------------------
+    df["dist_center"] = np.sqrt((df[x_col] - center_x)**2 + (df[y_col] - center_y)**2)
+    df["inside_center"] = df["dist_center"] <= radius
+
+    # -----------------------------------------
+    # 4. Fraction per frame (CRITICAL STEP)
+    # -----------------------------------------
+    frame_records = []
+
+    for (cond, frame), sub in df.groupby([condition_col, frame_col]):
+        total = sub[individual_col].nunique()
+        if total == 0:
+            continue
+
+        inside = sub.loc[sub["inside_center"], individual_col].nunique()
+        frac = inside / total
+
+        frame_records.append({
+            condition_col: cond,
+            frame_col: frame,
+            "CentralFraction": frac
+        })
+
+    frame_df = pd.DataFrame(frame_records)
+
+    # -----------------------------------------
+    # 5. Apply binning (NEW)
+    # -----------------------------------------
+    frame_df["FrameBin"] = (frame_df[frame_col] // bin_size) * bin_size
+
+    central_df = (
+        frame_df
+        .groupby([condition_col, "FrameBin"])["CentralFraction"]
+        .mean()
+        .reset_index()
+    )
+
+    # -----------------------------------------
+    # 6. Apply display labels
+    # -----------------------------------------
+    if display_labels is not None:
+        central_df["PlotLabel"] = central_df[condition_col].map(display_labels)
+    else:
+        central_df["PlotLabel"] = central_df[condition_col]
+
+    # -----------------------------------------
+    # 7. Plot
+    # -----------------------------------------
+    sns.set_style("white")
+    plt.rcParams.update({"font.size":11, "axes.spines.top":False, "axes.spines.right":False})
+
+    plt.figure(figsize=(8,6))
+
+    sns.pointplot(
+        data=central_df,
+        x="FrameBin",
+        y="CentralFraction",
+        hue="PlotLabel",
+        hue_order=[display_labels[c] for c in ordered_conditions] if display_labels else ordered_conditions,
+        palette=condition_colors,
+        errorbar="se",
+        dodge=True
+    )
+
+    plt.axhline(0.5, linestyle="--", color="gray", linewidth=1)
+    plt.ylim(0,1)
+    plt.title(f"Central Occupancy (radius = {radius} cm, bin = {bin_size} frames)")
+    plt.ylabel("Fraction in center (± SEM)")
+    plt.xlabel("Frame (binned)")
+    plt.legend(title="Condition", bbox_to_anchor=(1.05,1))
+
+    plt.tight_layout()
+    plt.show()
+
+    return central_df
