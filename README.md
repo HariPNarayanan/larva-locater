@@ -27,7 +27,7 @@ analysis.ipynb   Notebook — the only file you need to run an analysis
 ### `config.py`
 Single source of truth for all constants used across the pipeline: arena dimensions, odour source coordinates, speed filter bounds, frame cutoff, and default column names. Also contains `build_palette()`, which constructs a consistent colour scheme and condition ordering from any dataframe. Editing a value here propagates to every function automatically — you never need to hunt across files to change a parameter.
 
-### `io.py`
+### `larva_io.py`
 Handles everything between raw data on disk and a clean dataframe in memory. The main entry point is `preprocess()`, which walks a directory tree, reads all CSVs, parses experimental metadata from folder names, interpolates missing trajectory coordinates, and adds a distance-to-target column — all in one call. Individual steps (`load`, `filter_frames`, `interpolate`, `add_distance`) are also available separately if needed.
 
 **Expected folder naming convention:**
