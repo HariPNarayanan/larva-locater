@@ -1,6 +1,6 @@
 # larva-locater
 
-A Python pipeline for analysing *Drosophila* larva chemotaxis trajectories. Takes raw tracking CSVs, cleans and preprocesses the data, computes behavioural metrics, and produces publication-ready figures.
+A Python pipeline for analysing *Drosophila* larva trajectories. Takes raw tracking CSVs, cleans and preprocesses the data, computes behavioural metrics, and produces analysis figures.
 
 ---
 
