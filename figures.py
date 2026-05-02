@@ -863,3 +863,310 @@ def probability_logistic(
         "comparison_table": comparison_table,
         "bootstrap_samples": bootstrap_results,
     }
+
+def behavior_summary_directional(
+    df: pd.DataFrame,
+    condition: str,
+    targets: dict      = None,
+    radius: float      = config.SUCCESS_RADIUS,
+    bin_size: int      = 100,
+    zone_width: float  = 10.0,
+):
+    """
+    Three-panel behavioural summary for one condition, showing the true
+    odour target alongside three null edge positions:
+ 
+        Panel A — Cumulative success rate over time (± SEM)
+        Panel B — Preference index over time (± SEM)
+        Panel C — Post-first-entry dwell time (box + strip)
+ 
+    The true target is plotted as a solid line / filled box throughout.
+    The three null edges are plotted as dashed lines / outlined boxes
+    so the comparison is immediately readable.
+ 
+    Parameters
+    ----------
+    condition : str
+        Must match a value in df['Condition'].
+    targets : dict or None
+        {label: (x, y)} mapping. Defaults to metrics.DIRECTIONAL_TARGETS.
+    radius : float
+        Radius in cm considered 'at target'. Default config.SUCCESS_RADIUS.
+    bin_size : int
+        Frame bin width in frames. Default 100.
+    zone_width : float
+        Width of near/far strips for PI calculation. Default 10 cm
+        (= one third of the arena, matching the standard PI definition).
+ 
+    Returns
+    -------
+    cumul_df, pref_df, dwell_df
+        The three underlying DataFrames, each with a 'Target' column
+        distinguishing the four positions.
+    """
+    _apply_style()
+ 
+    if targets is None:
+        targets = metrics.DIRECTIONAL_TARGETS
+ 
+    # --- Compute all three metrics ---
+    cumul_df = metrics.cumulative_success_directional(
+        df, condition=condition, targets=targets,
+        radius=radius, bin_size=bin_size,
+    )
+    pref_df  = metrics.preference_index_directional(
+        df, condition=condition, targets=targets,
+        bin_size=bin_size, zone_width=zone_width,
+    )
+    dwell_df = metrics.dwell_time_directional(
+        df, condition=condition, targets=targets, radius=radius,
+    )
+ 
+    # --- Consistent style map across all three panels ---
+    # True target: solid / filled / thicker / high contrast
+    # Null edges:  dashed / outlined / thinner / muted
+    null_labels  = [l for l in targets if l != "Target (odour)"]
+    null_colors  = ["#7fb3c8", "#a0b8a0", "#c4a882"]
+    target_order = ["Target (odour)"] + null_labels
+ 
+    style_map = {
+        "Target (odour)": {
+            "color":     "#1a6e8e",
+            "linestyle": "-",
+            "linewidth": 2.5,
+            "zorder":    3,
+        },
+    }
+    for label, color in zip(null_labels, null_colors):
+        style_map[label] = {
+            "color":     color,
+            "linestyle": "--",
+            "linewidth": 1.5,
+            "zorder":    2,
+        }
+ 
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(condition, fontsize=13, y=1.01)
+ 
+    # --- Panel A: Cumulative success rate ---
+    ax = axes[0]
+    for label in target_order:
+        sub = cumul_df[cumul_df["Target"] == label].sort_values("FrameBin")
+        s   = style_map[label]
+        ax.plot(
+            sub["FrameBin"], sub["CumulSuccess"],
+            label=label, color=s["color"],
+            linestyle=s["linestyle"], linewidth=s["linewidth"],
+            zorder=s["zorder"],
+        )
+        ax.fill_between(
+            sub["FrameBin"],
+            sub["CumulSuccess"] - sub["SEM"],
+            sub["CumulSuccess"] + sub["SEM"],
+            color=s["color"], alpha=0.15, zorder=s["zorder"] - 1,
+        )
+    ax.set_ylim(0, 1)
+    ax.axhline(1.0, linestyle=":", color="gray", linewidth=0.8)
+    ax.set_title("Cumulative Success Rate")
+    ax.set_xlabel("Frame")
+    ax.set_ylabel("Proportion reached (± SEM)")
+    ax.legend(title="Target", frameon=True, fontsize=9)
+ 
+    # --- Panel B: Preference index ---
+    ax = axes[1]
+    # Aggregate to mean ± SEM across individuals per (target, frame bin)
+    pref_agg = (
+        pref_df.groupby(["Target", "FrameBin"])["PreferenceIndex"]
+        .agg(Mean="mean", SEM=lambda x: x.sem())
+        .reset_index()
+    )
+    for label in target_order:
+        sub = pref_agg[pref_agg["Target"] == label].sort_values("FrameBin")
+        s   = style_map[label]
+        ax.plot(
+            sub["FrameBin"], sub["Mean"],
+            label=label, color=s["color"],
+            linestyle=s["linestyle"], linewidth=s["linewidth"],
+            zorder=s["zorder"],
+        )
+        ax.fill_between(
+            sub["FrameBin"],
+            sub["Mean"] - sub["SEM"],
+            sub["Mean"] + sub["SEM"],
+            color=s["color"], alpha=0.15, zorder=s["zorder"] - 1,
+        )
+    ax.axhline(0, linestyle="--", color="black", linewidth=1)
+    ax.set_title("Preference Index Over Time")
+    ax.set_xlabel("Frame Bin")
+    ax.set_ylabel("Preference Index (near − far)")
+    ax.legend(title="Target", frameon=True, fontsize=9)
+ 
+    # --- Panel C: Dwell time ---
+    ax = axes[2]
+    # Box per target in consistent order, style matched by edge colour
+    box_palette = {label: style_map[label]["color"] for label in target_order}
+ 
+    # Separate boxplot properties for true target vs nulls
+    # seaborn doesn't support per-box linestyle natively, so we draw
+    # the true target as a filled box and the nulls with lighter alpha
+    sns.boxplot(
+        data=dwell_df,
+        x="Target", y="DwellTime",
+        order=target_order,
+        palette=box_palette,
+        showfliers=False,
+        ax=ax,
+    )
+    sns.stripplot(
+        data=dwell_df,
+        x="Target", y="DwellTime",
+        order=target_order,
+        palette=box_palette,
+        jitter=True, size=4, alpha=0.6,
+        edgecolor="black", linewidth=0.4,
+        ax=ax,
+    )
+ 
+    # Visually de-emphasise null boxes by reducing their patch alpha
+    for i, patch in enumerate(ax.patches):
+        if i > 0:   # index 0 = true target box
+            patch.set_alpha(0.45)
+ 
+    ax.axhline(0, linestyle=":", color="gray", linewidth=0.8)
+    ax.set_title("Post-Entry Dwell Time")
+    ax.set_xlabel("Target")
+    ax.set_ylabel("Frames inside after first entry")
+    ax.tick_params(axis="x", rotation=20)
+ 
+    plt.tight_layout()
+    plt.show()
+ 
+    return cumul_df, pref_df, dwell_df
+
+# ---------------------------------------------------------------------------
+# 12. Behaviour summary — current occupancy variant
+# ---------------------------------------------------------------------------
+ 
+def behavior_summary_current_occupancy(
+    df: pd.DataFrame,
+    bin_size: int      = 100,
+    target_x: float    = config.TARGET_X,
+    target_y: float    = config.TARGET_Y,
+    radius: float      = config.SUCCESS_RADIUS,
+    zone_bounds: tuple = (10.0, 20.0),
+    display_labels: dict = None,
+):
+    """
+    Three-panel behavioural summary, replacing the cumulative success panel
+    with a current-occupancy time series:
+ 
+        Panel A — Current occupancy: proportion of individuals inside the
+                  success radius at each frame bin (± SEM across frames).
+                  Unlike cumulative success this can go up and down,
+                  reflecting moment-to-moment zone use.
+        Panel B — Preference index over time (± SEM), unchanged.
+        Panel C — Post-first-entry dwell time (box + strip), unchanged.
+ 
+    All conditions in df are plotted together, coloured by the standard
+    palette from config.build_palette().
+ 
+    Parameters
+    ----------
+    display_labels : dict or None
+        Optional {condition_name: short_label} for axis tick labels.
+ 
+    Returns
+    -------
+    occupancy_df, pref_df, dwell_df
+    """
+    _apply_style()
+    colors, order = config.build_palette(df)
+ 
+    occupancy_df = metrics.current_occupancy(
+        df,
+        target_x=target_x, target_y=target_y,
+        radius=radius, bin_size=bin_size,
+    )
+    pref_df  = metrics.preference_index(
+        df, bin_size=bin_size, zone_bounds=zone_bounds,
+    )
+    dwell_df = metrics.dwell_time(
+        df, target_x=target_x, target_y=target_y, radius=radius,
+    )
+ 
+    def _label(cond):
+        return display_labels[cond] if display_labels and cond in display_labels else cond
+ 
+    label_order = [_label(c) for c in order]
+ 
+    for frame in (occupancy_df, pref_df, dwell_df):
+        frame["PlotLabel"] = frame[config.COL_CONDITION].map(_label)
+ 
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+ 
+    # --- Panel A: Current occupancy ---
+    ax = axes[0]
+    for cond in order:
+        sub = occupancy_df[
+            occupancy_df[config.COL_CONDITION] == cond
+        ].sort_values("FrameBin")
+        col = colors[cond]
+        lbl = _label(cond)
+        ax.plot(
+            sub["FrameBin"], sub["MeanOccupancy"],
+            color=col, label=lbl, linewidth=1.8,
+        )
+        ax.fill_between(
+            sub["FrameBin"],
+            sub["MeanOccupancy"] - sub["SEM"],
+            sub["MeanOccupancy"] + sub["SEM"],
+            color=col, alpha=0.2,
+        )
+    ax.set_ylim(0, 1)
+    ax.set_title("Current Occupancy")
+    ax.set_xlabel("Frame")
+    ax.set_ylabel(f"Proportion inside radius {radius} cm (± SEM)")
+    ax.legend(title="Condition", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
+ 
+    # --- Panel B: Preference index ---
+    sns.pointplot(
+        data=pref_df,
+        x="FrameBin",
+        y="PreferenceIndex",
+        hue="PlotLabel",
+        hue_order=label_order,
+        palette=colors,
+        errorbar="se",
+        dodge=True,
+        ax=axes[1],
+    )
+    axes[1].axhline(0, linestyle="--", color="black", linewidth=1)
+    axes[1].set_title("Preference Index Over Time")
+    axes[1].set_ylabel("Preference Index (Z1 − Z3)")
+    axes[1].set_xlabel("Frame Bin")
+    axes[1].legend(title="Condition", bbox_to_anchor=(1.05, 1))
+ 
+    # --- Panel C: Dwell time ---
+    ax = axes[2]
+    if not dwell_df.empty:
+        sns.boxplot(
+            data=dwell_df, x="PlotLabel", y="DwellTime",
+            order=label_order, palette=colors,
+            showfliers=False, ax=ax,
+        )
+        sns.stripplot(
+            data=dwell_df, x="PlotLabel", y="DwellTime",
+            order=label_order, palette=colors,
+            jitter=True, size=5, alpha=0.7,
+            edgecolor="black", linewidth=0.5, ax=ax,
+        )
+    ax.set_title("Post-Success Dwell Time")
+    ax.set_ylabel("Frames inside after first entry")
+    ax.set_xlabel("Condition")
+    ax.tick_params(axis="x", rotation=45)
+ 
+    plt.tight_layout()
+    plt.show()
+ 
+    return occupancy_df, pref_df, dwell_df
+ 

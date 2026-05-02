@@ -14,7 +14,7 @@ import seaborn as sns
 
 TARGET_X: float = 14.0       # Odour source X position (cm)
 TARGET_Y: float = 2.0        # Odour source Y position (cm)
-SUCCESS_RADIUS: float = 2.0  # Radius considered "at target" (cm)
+SUCCESS_RADIUS: float = 5.0  # Radius considered "at target" (cm)
 
 ARENA_WIDTH: float  = 30.0   # cm
 ARENA_HEIGHT: float = 30.0   # cm
