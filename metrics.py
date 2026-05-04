@@ -829,3 +829,84 @@ def current_occupancy(
         records.append(binned)
  
     return pd.concat(records, ignore_index=True)
+
+# ---------------------------------------------------------------------------
+# Directional current occupancy
+# ---------------------------------------------------------------------------
+ 
+def current_occupancy_directional(
+    df: pd.DataFrame,
+    condition: str,
+    targets: dict        = None,
+    radius: float        = config.SUCCESS_RADIUS,
+    bin_size: int        = 100,
+    frame_col: str       = config.COL_FRAME,
+    individual_col: str  = config.COL_INDIVIDUAL,
+    x_col: str           = config.COL_X,
+    y_col: str           = config.COL_Y,
+    condition_col: str   = config.COL_CONDITION,
+) -> pd.DataFrame:
+    """
+    Proportion of individuals currently inside each target's radius,
+    averaged per frame bin, for one condition.
+ 
+    Mirrors current_occupancy() but computed simultaneously for all four
+    arena positions (true target + three null edges), so the four curves
+    are directly comparable on the same axes.
+ 
+    Parameters
+    ----------
+    condition : str
+        Must match a value in df['Condition'].
+    targets : dict or None
+        {label: (x, y)} mapping. Defaults to DIRECTIONAL_TARGETS.
+    radius : float
+        Radius in cm considered 'at target'. Default config.SUCCESS_RADIUS.
+    bin_size : int
+        Frame bin width in frames. Default 100.
+ 
+    Returns
+    -------
+    pd.DataFrame with columns:
+        [Target, FrameBin, MeanOccupancy, SEM]
+ 
+        MeanOccupancy is the mean proportion of individuals inside the
+        radius across all frames within each bin.
+        SEM is across frames within the bin.
+    """
+    if targets is None:
+        targets = DIRECTIONAL_TARGETS
+ 
+    df = df[df[condition_col] == condition].copy()
+    if df.empty:
+        raise ValueError(f"No rows found for condition '{condition}'.")
+ 
+    df["FrameBin"] = (df[frame_col] // bin_size) * bin_size
+    records = []
+ 
+    for label, (tx, ty) in targets.items():
+        dist          = np.sqrt((df[x_col] - tx) ** 2 + (df[y_col] - ty) ** 2)
+        df["_inside"] = dist <= radius
+ 
+        # Proportion inside at each individual frame
+        frame_props = (
+            df.groupby(frame_col)["_inside"]
+            .mean()
+            .reset_index()
+            .rename(columns={"_inside": "Proportion"})
+        )
+        frame_props["FrameBin"] = (frame_props[frame_col] // bin_size) * bin_size
+ 
+        binned = (
+            frame_props.groupby("FrameBin")["Proportion"]
+            .agg(
+                MeanOccupancy="mean",
+                SEM=lambda x: x.sem(),
+            )
+            .reset_index()
+        )
+        binned["Target"] = label
+        records.append(binned)
+ 
+    return pd.concat(records, ignore_index=True)
+ 

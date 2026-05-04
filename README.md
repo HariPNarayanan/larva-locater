@@ -14,7 +14,7 @@ Larvae are tracked in a 25 × 25 cm arena with an odour source at a fixed positi
 
 ```
 config.py        Constants, column names, and colour palette logic
-io.py            Data loading, cleaning, and preprocessing
+larva_io.py      Data loading, cleaning, and preprocessing
 metrics.py       Pure computation — all behavioural metrics
 figures.py       All plotting functions
 analysis.ipynb   Notebook — the only file you need to run an analysis

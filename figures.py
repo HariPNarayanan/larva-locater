@@ -1170,3 +1170,171 @@ def behavior_summary_current_occupancy(
  
     return occupancy_df, pref_df, dwell_df
  
+ # ---------------------------------------------------------------------------
+# 13. Behaviour summary — directional null + current occupancy (per condition)
+# ---------------------------------------------------------------------------
+ 
+def behavior_summary_directional_occupancy(
+    df: pd.DataFrame,
+    condition: str,
+    targets: dict      = None,
+    radius: float      = config.SUCCESS_RADIUS,
+    bin_size: int      = 100,
+    zone_width: float  = 10.0,
+):
+    """
+    Three-panel behavioural summary for one condition, combining the
+    directional null comparison with current occupancy:
+ 
+        Panel A — Current occupancy: proportion of individuals inside
+                  each target's radius per frame bin (± SEM across frames).
+                  True target solid, null edges dashed.
+        Panel B — Preference index toward each target over time (± SEM).
+                  True target solid, null edges dashed.
+        Panel C — Post-first-entry dwell time for each target (box + strip).
+ 
+    Parameters
+    ----------
+    condition : str
+        Must match a value in df['Condition'].
+    targets : dict or None
+        {label: (x, y)} mapping. Defaults to metrics.DIRECTIONAL_TARGETS.
+    radius : float
+        Radius in cm considered 'at target'. Default config.SUCCESS_RADIUS.
+    bin_size : int
+        Frame bin width in frames. Default 100.
+    zone_width : float
+        Width of near/far strips for PI calculation. Default 10 cm.
+ 
+    Returns
+    -------
+    occupancy_df, pref_df, dwell_df
+    """
+    _apply_style()
+ 
+    if targets is None:
+        targets = metrics.DIRECTIONAL_TARGETS
+ 
+    # --- Compute all three metrics ---
+    occupancy_df = metrics.current_occupancy_directional(
+        df, condition=condition, targets=targets,
+        radius=radius, bin_size=bin_size,
+    )
+    pref_df = metrics.preference_index_directional(
+        df, condition=condition, targets=targets,
+        bin_size=bin_size, zone_width=zone_width,
+    )
+    dwell_df = metrics.dwell_time_directional(
+        df, condition=condition, targets=targets, radius=radius,
+    )
+ 
+    # --- Shared style map ---
+    null_labels  = [l for l in targets if l != "Target (odour)"]
+    null_colors  = ["#7fb3c8", "#a0b8a0", "#c4a882"]
+    target_order = ["Target (odour)"] + null_labels
+ 
+    style_map = {
+        "Target (odour)": {
+            "color":     "#1a6e8e",
+            "linestyle": "-",
+            "linewidth": 2.5,
+            "zorder":    3,
+        },
+    }
+    for label, color in zip(null_labels, null_colors):
+        style_map[label] = {
+            "color":     color,
+            "linestyle": "--",
+            "linewidth": 1.5,
+            "zorder":    2,
+        }
+ 
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(condition, fontsize=13, y=1.01)
+ 
+    # --- Panel A: Current occupancy ---
+    ax = axes[0]
+    for label in target_order:
+        sub = occupancy_df[occupancy_df["Target"] == label].sort_values("FrameBin")
+        s   = style_map[label]
+        ax.plot(
+            sub["FrameBin"], sub["MeanOccupancy"],
+            label=label, color=s["color"],
+            linestyle=s["linestyle"], linewidth=s["linewidth"],
+            zorder=s["zorder"],
+        )
+        ax.fill_between(
+            sub["FrameBin"],
+            sub["MeanOccupancy"] - sub["SEM"],
+            sub["MeanOccupancy"] + sub["SEM"],
+            color=s["color"], alpha=0.15, zorder=s["zorder"] - 1,
+        )
+    ax.set_ylim(0, 1)
+    ax.set_title("Current Occupancy")
+    ax.set_xlabel("Frame")
+    ax.set_ylabel(f"Proportion inside radius {radius} cm (± SEM)")
+    ax.legend(title="Target", frameon=True, fontsize=9)
+ 
+    # --- Panel B: Preference index ---
+    ax = axes[1]
+    pref_agg = (
+        pref_df.groupby(["Target", "FrameBin"])["PreferenceIndex"]
+        .agg(Mean="mean", SEM=lambda x: x.sem())
+        .reset_index()
+    )
+    for label in target_order:
+        sub = pref_agg[pref_agg["Target"] == label].sort_values("FrameBin")
+        s   = style_map[label]
+        ax.plot(
+            sub["FrameBin"], sub["Mean"],
+            label=label, color=s["color"],
+            linestyle=s["linestyle"], linewidth=s["linewidth"],
+            zorder=s["zorder"],
+        )
+        ax.fill_between(
+            sub["FrameBin"],
+            sub["Mean"] - sub["SEM"],
+            sub["Mean"] + sub["SEM"],
+            color=s["color"], alpha=0.15, zorder=s["zorder"] - 1,
+        )
+    ax.axhline(0, linestyle="--", color="black", linewidth=1)
+    ax.set_title("Preference Index Over Time")
+    ax.set_xlabel("Frame Bin")
+    ax.set_ylabel("Preference Index (near − far)")
+    ax.legend(title="Target", frameon=True, fontsize=9)
+ 
+    # --- Panel C: Dwell time ---
+    ax = axes[2]
+    box_palette = {label: style_map[label]["color"] for label in target_order}
+ 
+    sns.boxplot(
+        data=dwell_df,
+        x="Target", y="DwellTime",
+        order=target_order,
+        palette=box_palette,
+        showfliers=False,
+        ax=ax,
+    )
+    sns.stripplot(
+        data=dwell_df,
+        x="Target", y="DwellTime",
+        order=target_order,
+        palette=box_palette,
+        jitter=True, size=4, alpha=0.6,
+        edgecolor="black", linewidth=0.4,
+        ax=ax,
+    )
+    for i, patch in enumerate(ax.patches):
+        if i > 0:
+            patch.set_alpha(0.45)
+ 
+    ax.set_title("Post-Entry Dwell Time")
+    ax.set_xlabel("Target")
+    ax.set_ylabel("Frames inside after first entry")
+    ax.tick_params(axis="x", rotation=20)
+ 
+    plt.tight_layout()
+    plt.show()
+ 
+    return occupancy_df, pref_df, dwell_df
+ 
