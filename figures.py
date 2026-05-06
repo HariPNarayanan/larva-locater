@@ -53,19 +53,19 @@ def behavior_summary_overtime(
         Panel A — Cumulative success rate over time (± SEM)
         Panel B — Preference index over time (± SEM)
         Panel C — Post-success dwell time (box + strip, successful only)
-
+ 
     Parameters
     ----------
     display_labels : dict or None
         Optional {condition_name: short_label} mapping for axis labels.
-
+ 
     Returns
     -------
     cumul_df, pref_df, dwell_df
     """
     _apply_style()
     colors, order = config.build_palette(df)
-
+ 
     cumul_df = metrics.cumulative_success(
         df, bin_size=bin_size, target_x=target_x, target_y=target_y, radius=radius
     )
@@ -75,18 +75,18 @@ def behavior_summary_overtime(
     dwell_df = metrics.dwell_time(
         df, target_x=target_x, target_y=target_y, radius=radius
     )
-
+ 
     # Apply display labels
     def _label(cond):
         return display_labels[cond] if display_labels and cond in display_labels else cond
-
+ 
     label_order = [_label(c) for c in order]
-
+ 
     for frame in (cumul_df, pref_df, dwell_df):
         frame["PlotLabel"] = frame[config.COL_CONDITION].map(_label)
-
+ 
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-
+ 
     # --- Panel A: Cumulative success rate ---
     ax = axes[0]
     for cond in order:
@@ -106,8 +106,12 @@ def behavior_summary_overtime(
     ax.set_xlabel("Frame")
     ax.set_ylabel("Proportion successful (± SEM)")
     ax.legend(title="Condition", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
-
+ 
     # --- Panel B: Preference index ---
+    # dodge=True causes a ZeroDivisionError in seaborn when there is only
+    # one hue level (n_hue_levels - 1 == 0). Guard against this explicitly.
+    _dodge = len(label_order) > 1
+ 
     sns.pointplot(
         data=pref_df,
         x="FrameBin",
@@ -116,7 +120,7 @@ def behavior_summary_overtime(
         hue_order=label_order,
         palette=colors,
         errorbar="se",
-        dodge=True,
+        dodge=_dodge,
         ax=axes[1],
     )
     axes[1].axhline(0, linestyle="--", color="black", linewidth=1)
@@ -124,7 +128,7 @@ def behavior_summary_overtime(
     axes[1].set_ylabel("Preference Index (Z1 − Z3)")
     axes[1].set_xlabel("Frame Bin")
     axes[1].legend(title="Condition", bbox_to_anchor=(1.05, 1))
-
+ 
     # --- Panel C: Dwell time ---
     ax = axes[2]
     if not dwell_df.empty:
@@ -143,10 +147,10 @@ def behavior_summary_overtime(
     ax.set_ylabel("Frames inside after first entry")
     ax.set_xlabel("Condition")
     ax.tick_params(axis="x", rotation=45)
-
+ 
     plt.tight_layout()
     plt.show()
-
+ 
     return cumul_df, pref_df, dwell_df
 
 
