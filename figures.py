@@ -1061,31 +1061,33 @@ def behavior_summary_current_occupancy(
     display_labels: dict = None,
 ):
     """
-    Three-panel behavioural summary, replacing the cumulative success panel
-    with a current-occupancy time series:
- 
-        Panel A — Current occupancy: proportion of individuals inside the
-                  success radius at each frame bin (± SEM across frames).
-                  Unlike cumulative success this can go up and down,
-                  reflecting moment-to-moment zone use.
-        Panel B — Preference index over time (± SEM), unchanged.
-        Panel C — Post-first-entry dwell time (box + strip), unchanged.
- 
+    Three-panel behavioural summary:
+
+        Panel A — Preference index over time (± SEM across trials, pointplot
+                  at every bin_size-th frame).
+        Panel B — Current occupancy: proportion of individuals inside the
+                  success radius, plotted as a pointplot at every bin_size-th
+                  frame (± SEM across trials), enabling direct statistical
+                  comparison across conditions at each sampled timepoint.
+        Panel C — Post-first-entry dwell time (box + strip).
+
     All conditions in df are plotted together, coloured by the standard
     palette from config.build_palette().
- 
+
     Parameters
     ----------
+    bin_size : int
+        Frame bin width used for both preference index and occupancy sampling.
     display_labels : dict or None
         Optional {condition_name: short_label} for axis tick labels.
- 
+
     Returns
     -------
     occupancy_df, pref_df, dwell_df
     """
     _apply_style()
     colors, order = config.build_palette(df)
- 
+
     occupancy_df = metrics.current_occupancy(
         df,
         target_x=target_x, target_y=target_y,
@@ -1097,42 +1099,21 @@ def behavior_summary_current_occupancy(
     dwell_df = metrics.dwell_time(
         df, target_x=target_x, target_y=target_y, radius=radius,
     )
- 
+
     def _label(cond):
         return display_labels[cond] if display_labels and cond in display_labels else cond
- 
+
     label_order = [_label(c) for c in order]
- 
+
     for frame in (occupancy_df, pref_df, dwell_df):
         frame["PlotLabel"] = frame[config.COL_CONDITION].map(_label)
- 
+
+    # Sample occupancy at every 100th frame to match preference index cadence
+    sampled_occupancy_df = occupancy_df[occupancy_df["FrameBin"] % 100 == 0].copy()
+
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
- 
-    # --- Panel A: Current occupancy ---
-    ax = axes[0]
-    for cond in order:
-        sub = occupancy_df[
-            occupancy_df[config.COL_CONDITION] == cond
-        ].sort_values("FrameBin")
-        col = colors[cond]
-        lbl = _label(cond)
-        ax.plot(
-            sub["FrameBin"], sub["MeanOccupancy"],
-            color=col, label=lbl, linewidth=1.8,
-        )
-        ax.fill_between(
-            sub["FrameBin"],
-            sub["MeanOccupancy"] - sub["SEM"],
-            sub["MeanOccupancy"] + sub["SEM"],
-            color=col, alpha=0.2,
-        )
-    ax.set_ylim(0, 1)
-    ax.set_title("Current Occupancy")
-    ax.set_xlabel("Frame")
-    ax.set_ylabel(f"Proportion inside radius {radius} cm (± SEM)")
-    ax.legend(title="Condition", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
- 
-    # --- Panel B: Preference index ---
+
+    # --- Panel A: Preference index ---
     sns.pointplot(
         data=pref_df,
         x="FrameBin",
@@ -1142,14 +1123,32 @@ def behavior_summary_current_occupancy(
         palette=colors,
         errorbar="se",
         dodge=True,
+        ax=axes[0],
+    )
+    axes[0].axhline(0, linestyle="--", color="black", linewidth=1)
+    axes[0].set_title("Preference Index Over Time")
+    axes[0].set_ylabel("Preference Index (Z1 − Z3)")
+    axes[0].set_xlabel("Frame Bin")
+    axes[0].legend(title="Condition", bbox_to_anchor=(1.05, 1))
+
+    # --- Panel B: Current occupancy (pointplot, trial-averaged ± SEM) ---
+    sns.pointplot(
+        data=occupancy_df,
+        x="FrameBin",
+        y="Occupancy",           # renamed from MeanOccupancy
+        hue="PlotLabel",
+        hue_order=label_order,
+        palette=colors,
+        errorbar="se",
+        dodge=True,
         ax=axes[1],
     )
-    axes[1].axhline(0, linestyle="--", color="black", linewidth=1)
-    axes[1].set_title("Preference Index Over Time")
-    axes[1].set_ylabel("Preference Index (Z1 − Z3)")
+    axes[1].set_ylim(0, 1)
+    axes[1].set_title("Current Occupancy")
     axes[1].set_xlabel("Frame Bin")
-    axes[1].legend(title="Condition", bbox_to_anchor=(1.05, 1))
- 
+    axes[1].set_ylabel(f"Proportion inside radius {radius} cm (± SEM)")
+    axes[1].legend(title="Condition", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
+
     # --- Panel C: Dwell time ---
     ax = axes[2]
     if not dwell_df.empty:
@@ -1168,12 +1167,11 @@ def behavior_summary_current_occupancy(
     ax.set_ylabel("Frames inside after first entry")
     ax.set_xlabel("Condition")
     ax.tick_params(axis="x", rotation=45)
- 
+
     plt.tight_layout()
     plt.show()
- 
+
     return occupancy_df, pref_df, dwell_df
- 
  # ---------------------------------------------------------------------------
 # 13. Behaviour summary — directional null + current occupancy (per condition)
 # ---------------------------------------------------------------------------

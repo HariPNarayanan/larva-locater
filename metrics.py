@@ -775,61 +775,42 @@ def current_occupancy(
     condition_col: str   = config.COL_CONDITION,
 ) -> pd.DataFrame:
     """
-    Count the number of individuals currently inside the success radius
-    at each frame, then average within frame bins.
- 
-    Unlike cumulative_success, this is not monotonically increasing —
-    individuals can leave and re-enter the zone, so this reflects
-    instantaneous occupancy rather than ever-reached success.
- 
-    The count is also expressed as a proportion of the total number of
-    individuals in that condition, so conditions with different group
-    sizes remain directly comparable.
- 
+    Compute per-trial occupancy proportion at each frame bin, returning
+    trial-level rows so that downstream plotting (e.g. sns.pointplot with
+    errorbar="se") computes SEM across trials rather than across frames.
+
+    For each trial (individual) and each frame bin, the occupancy proportion
+    is the mean of the binary inside/outside indicator across all frames
+    within that bin — i.e. the fraction of frames in the bin during which
+    that individual was inside the radius.
+
+    Unlike the previous version, this does NOT pre-aggregate across trials.
+    The caller is responsible for any further aggregation (e.g. pointplot
+    will handle the cross-trial mean and SEM automatically).
+
     Returns
     -------
     pd.DataFrame with columns:
-        [Condition, FrameBin, MeanOccupancy, SEM]
- 
-        MeanOccupancy is the mean proportion of individuals inside the
-        radius across all frames within each bin.
-        SEM is across frames within the bin.
+        [condition_col, individual_col, FrameBin, Occupancy]
+
+        Occupancy is the proportion of frames within the bin during which
+        the individual was inside the radius. One row per individual per
+        FrameBin per condition.
     """
     df = df.copy()
     dist          = np.sqrt((df[x_col] - target_x) ** 2 + (df[y_col] - target_y) ** 2)
     df["_inside"] = dist <= radius
     df["FrameBin"] = (df[frame_col] // bin_size) * bin_size
- 
-    records = []
- 
-    for cond, cond_df in df.groupby(condition_col):
-        n_total = cond_df[individual_col].nunique()
-        if n_total == 0:
-            continue
- 
-        # Proportion inside at each individual frame
-        frame_props = (
-            cond_df.groupby(frame_col)["_inside"]
-            .mean()           # mean over rows = proportion of individuals inside
-            .reset_index()
-            .rename(columns={"_inside": "Proportion"})
-        )
-        frame_props["FrameBin"] = (frame_props[frame_col] // bin_size) * bin_size
- 
-        # Average proportion within each bin
-        binned = (
-            frame_props.groupby("FrameBin")["Proportion"]
-            .agg(
-                MeanOccupancy="mean",
-                SEM=lambda x: x.sem(),
-            )
-            .reset_index()
-        )
-        binned[condition_col] = cond
-        records.append(binned)
- 
-    return pd.concat(records, ignore_index=True)
 
+    # Mean of binary indicator per trial per bin = fraction of bin spent inside
+    trial_binned = (
+        df.groupby([condition_col, individual_col, "FrameBin"])["_inside"]
+        .mean()
+        .reset_index()
+        .rename(columns={"_inside": "Occupancy"})
+    )
+
+    return trial_binned
 # ---------------------------------------------------------------------------
 # Directional current occupancy
 # ---------------------------------------------------------------------------
