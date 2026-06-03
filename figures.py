@@ -1053,12 +1053,14 @@ def behavior_summary_directional(
  
 def behavior_summary_current_occupancy(
     df: pd.DataFrame,
-    bin_size: int      = 100,
-    target_x: float    = config.TARGET_X,
-    target_y: float    = config.TARGET_Y,
-    radius: float      = config.SUCCESS_RADIUS,
+    bin_size: int = 100,
+    target_x: float = config.TARGET_X,
+    target_y: float = config.TARGET_Y,
+    radius: float = config.SUCCESS_RADIUS,
     zone_bounds: tuple = (10.0, 20.0),
     display_labels: dict = None,
+    palette_override: dict = None,
+    condition_order=None,
 ):
     """
     Three-panel behavioural summary:
@@ -1087,6 +1089,20 @@ def behavior_summary_current_occupancy(
     """
     _apply_style()
     colors, order = config.build_palette(df)
+    
+    if condition_order is not None:
+        observed = list(df[config.COL_CONDITION].unique())
+
+        order = (
+            [c for c in condition_order if c in observed] +
+            [c for c in observed if c not in condition_order]
+        )
+
+    if palette_override is not None:
+        colors = {
+            cond: palette_override.get(cond, colors.get(cond))
+            for cond in order
+        }
 
     occupancy_df = metrics.current_occupancy(
         df,
