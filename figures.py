@@ -1142,6 +1142,7 @@ def behavior_summary_current_occupancy(
         ax=axes[0],
     )
     axes[0].axhline(0, linestyle="--", color="black", linewidth=1)
+    axes[0].set_ylim(-0.6, 1)
     axes[0].set_title("Preference Index Over Time")
     axes[0].set_ylabel("Preference Index (Z1 − Z3)")
     axes[0].set_xlabel("Frame Bin")
