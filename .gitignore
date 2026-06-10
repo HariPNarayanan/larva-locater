@@ -3,3 +3,4 @@ __pycache__/
 *.pyo
 .ipynb_checkpoints/
 analysis_current.ipynb
+figures/

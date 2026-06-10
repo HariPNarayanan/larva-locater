@@ -32,6 +32,12 @@ def _apply_style():
         "font.size": 11,
         "axes.spines.top": False,
         "axes.spines.right": False,
+        # --- Vector rendering settings ---
+        "pdf.fonttype": 42,        # embeds fonts as TrueType rather than bitmaps
+        "ps.fonttype": 42,         # same for PostScript
+        "svg.fonttype": "none",    # keeps text as text in SVG
+        "path.simplify": False,    # don't simplify paths — keeps all data points
+        "agg.path.chunksize": 0,   # no chunking — renders full paths at once
     })
 
 
@@ -167,6 +173,7 @@ def trajectory_heatmaps(
     label_size: int     = 14,
     tick_size: int      = 12,
     cbar_size: int      = 14,
+    save_path: str = None,   # e.g. "figures/fig1.pdf"
 ):
     """
     Spatial density heatmap split into equal frame bins for a single condition.
@@ -220,6 +227,8 @@ def trajectory_heatmaps(
 
     fig.suptitle(f"Trajectory Heatmap — {condition}", fontsize=title_size + 4)
     plt.subplots_adjust(right=0.85, top=0.85)
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight")
     plt.show()
 
 
@@ -1061,6 +1070,7 @@ def behavior_summary_current_occupancy(
     display_labels: dict = None,
     palette_override: dict = None,
     condition_order=None,
+    save_path: str = None,   # e.g. "figures/fig1.pdf"
 ):
     """
     Three-panel behavioural summary:
@@ -1186,6 +1196,8 @@ def behavior_summary_current_occupancy(
     ax.tick_params(axis="x", rotation=45)
 
     plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight")
     plt.show()
 
     return occupancy_df, pref_df, dwell_df
@@ -1200,6 +1212,7 @@ def behavior_summary_directional_occupancy(
     radius: float      = config.SUCCESS_RADIUS,
     bin_size: int      = 100,
     zone_width: float  = 10.0,
+    save_path: str = None,   # e.g. "figures/fig1.pdf"
 ):
     """
     Three-panel behavioural summary for one condition, combining the
@@ -1353,6 +1366,8 @@ def behavior_summary_directional_occupancy(
     ax.tick_params(axis="x", rotation=20)
  
     plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight")
     plt.show()
  
     return occupancy_df, pref_df, dwell_df
