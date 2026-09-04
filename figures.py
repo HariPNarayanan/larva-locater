@@ -1066,7 +1066,7 @@ def behavior_summary_current_occupancy(
     target_x: float = config.TARGET_X,
     target_y: float = config.TARGET_Y,
     radius: float = config.SUCCESS_RADIUS,
-    zone_bounds: tuple = (10.0, 20.0),
+    zone_bounds: tuple = (12.0, 20.0),
     display_labels: dict = None,
     palette_override: dict = None,
     condition_order=None,
@@ -1371,4 +1371,615 @@ def behavior_summary_directional_occupancy(
     plt.show()
  
     return occupancy_df, pref_df, dwell_df
- 
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import LogNorm
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import LogNorm
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import LogNorm
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import LogNorm
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import LogNorm
+
+def trajectory_heatmaps_with_marginals(
+    df,
+    condition,
+    frame_bin_size=100,
+    grid_size=1,
+    x_range=(0, 30),
+    y_range=(0, 30),
+    marginal_ratio=0.22,     # marginal size, relative to ax_main's rendered box
+    cbar_ratio=0.12,         # colorbar width, relative to ax_main's rendered box
+    marginal_kind="line",
+    marginal_color="steelblue",
+    panel_gap=0.008,         # figure-fraction gap between a heatmap and its OWN marginals
+    bin_spacing=0.35,        # extra breathing room BETWEEN bins (fraction of axis width) —
+                             # this is what stops one bin's y-marginal hitting the next bin
+    right_margin=0.16,       # figure-fraction reserved on the right for the last y-marginal + colorbar
+    cbar_gap=0.03,
+    title_size=18,
+    label_size=14,
+    tick_size=12,
+    cbar_size=14,
+    condition_col="Condition",
+    frame_col="Frame",
+    x_col="X",
+    y_col="Y",
+    save_path=None,
+):
+    df = df[df[condition_col] == condition].copy()
+
+    min_frame = df[frame_col].min()
+    max_frame = df[frame_col].max()
+    frame_bins = np.arange(min_frame, max_frame + frame_bin_size, frame_bin_size)
+    num_bins = len(frame_bins) - 1
+
+    x_lo, x_hi = x_range
+    y_lo, y_hi = y_range
+    x_edges = np.arange(x_lo, x_hi + grid_size, grid_size)
+    y_edges = np.arange(y_lo, y_hi + grid_size, grid_size)
+
+    fig = plt.figure(figsize=(5.5 * num_bins, 7.5))
+
+    # `wspace` reserves space BETWEEN GridSpec columns as a fraction of the
+    # average axis width — exactly the unit we need, since every ax_main
+    # will render to the same size (same data range -> same square).
+    # `right` reserves a fixed strip on the right of the whole figure for
+    # the LAST bin's y-marginal + colorbar, which live outside the grid.
+    gs = gridspec.GridSpec(
+        nrows=1, ncols=num_bins, figure=fig,
+        left=0.06, right=1 - right_margin, top=0.88, bottom=0.14,
+        wspace=marginal_ratio + bin_spacing,
+    )
+
+    cax = None
+    panels = []
+
+    for i in range(num_bins):
+        bin_start, bin_end = frame_bins[i], frame_bins[i + 1]
+        df_bin = df[(df[frame_col] >= bin_start) & (df[frame_col] < bin_end)]
+
+        ax_main = fig.add_subplot(gs[0, i])
+        ax_xmarg = fig.add_axes([0, 0, 0.1, 0.1], sharex=ax_main)
+        ax_ymarg = fig.add_axes([0, 0, 0.1, 0.1], sharey=ax_main)
+
+        ax_main.set_xlim(x_lo, x_hi)
+        ax_main.set_ylim(y_lo, y_hi)
+        ax_main.autoscale(enable=False)
+        ax_xmarg.autoscale(enable=False, axis="x")
+        ax_ymarg.autoscale(enable=False, axis="y")
+
+        hist, xedges, yedges = np.histogram2d(
+            df_bin[x_col], df_bin[y_col], bins=[x_edges, y_edges]
+        )
+        cax = ax_main.pcolormesh(
+            xedges, yedges, hist.T,
+            cmap="viridis", shading="auto", norm=LogNorm(vmin=1),
+        )
+        ax_main.set_title(f"Frames {bin_start}-{bin_end}", fontsize=title_size)
+        if i == 0:
+            ax_main.set_ylabel("Y-coordinate (cm)", fontsize=label_size)
+        ax_main.tick_params(bottom=False, labelbottom=False, labelsize=tick_size)
+        ax_main.set_aspect("equal")
+        ax_main.grid(True, alpha=0.3)
+
+        x_counts, _ = np.histogram(df_bin[x_col], bins=x_edges)
+        x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+        if marginal_kind == "bar":
+            ax_xmarg.bar(x_centers, x_counts, width=grid_size, color=marginal_color)
+        else:
+            ax_xmarg.plot(x_centers, x_counts, color=marginal_color, lw=1.5)
+            ax_xmarg.fill_between(x_centers, x_counts, color=marginal_color, alpha=0.3)
+        ax_xmarg.set_ylim(bottom=0)
+        ax_xmarg.margins(y=0.08)
+        ax_xmarg.invert_yaxis()
+        ax_xmarg.set_xlabel("X-coordinate (cm)", fontsize=label_size)
+        ax_xmarg.tick_params(labelsize=tick_size - 2)
+        if i == 0:
+            ax_xmarg.set_ylabel("Freq.", fontsize=label_size - 2)
+        else:
+            ax_xmarg.tick_params(labelleft=False)
+        ax_xmarg.spines[["top", "right"]].set_visible(False)
+
+        y_counts, _ = np.histogram(df_bin[y_col], bins=y_edges)
+        y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+        if marginal_kind == "bar":
+            ax_ymarg.barh(y_centers, y_counts, height=grid_size, color=marginal_color)
+        else:
+            ax_ymarg.plot(y_counts, y_centers, color=marginal_color, lw=1.5)
+            ax_ymarg.fill_betweenx(y_centers, y_counts, color=marginal_color, alpha=0.3)
+        ax_ymarg.set_xlim(left=0)
+        ax_ymarg.margins(x=0.08)
+        ax_ymarg.tick_params(labelsize=tick_size - 2)
+        ax_ymarg.spines[["top", "right"]].set_visible(False)
+
+        is_last = (i == num_bins - 1)
+        if is_last:
+            ax_ymarg.yaxis.tick_right()
+            ax_ymarg.yaxis.set_label_position("right")
+            ax_ymarg.set_ylabel("Y-coordinate (cm)", fontsize=label_size - 2)
+            ax_ymarg.set_xlabel("Freq.", fontsize=label_size - 2)
+        else:
+            ax_ymarg.tick_params(labelleft=False, labelright=False)
+
+        ax_main.set_xlim(x_lo, x_hi)
+        ax_main.set_ylim(y_lo, y_hi)
+        ax_xmarg.set_xlim(x_lo, x_hi)
+        ax_ymarg.set_ylim(y_lo, y_hi)
+
+        panels.append((ax_main, ax_xmarg, ax_ymarg))
+
+    fig.suptitle(f"Trajectory Heatmaps + Marginals - Condition: {condition}",
+                 fontsize=title_size + 4)
+
+    # ---- Render once, then snap every marginal to its own ax_main's true box ----
+    fig.canvas.draw()
+    for ax_main, ax_xmarg, ax_ymarg in panels:
+        pos = ax_main.get_position()
+        xmarg_h = marginal_ratio * pos.height
+        ymarg_w = marginal_ratio * pos.width
+        ax_xmarg.set_position([pos.x0, pos.y0 - panel_gap - xmarg_h, pos.width, xmarg_h])
+        ax_ymarg.set_position([pos.x1 + panel_gap, pos.y0, ymarg_w, pos.height])
+
+    # ---- Colorbar: anchored past the last y-marginal's true right edge,
+    # inside the `right_margin` strip we reserved above.
+    fig.canvas.draw()
+    last_main_pos = panels[-1][0].get_position()
+    last_ymarg_pos = panels[-1][2].get_position()
+
+    cbar_x0 = last_ymarg_pos.x1 + cbar_gap
+    cbar_w = cbar_ratio * last_main_pos.width
+    cbar_ax = fig.add_axes([cbar_x0, last_main_pos.y0, cbar_w, last_main_pos.height])
+    cbar = fig.colorbar(cax, cax=cbar_ax, orientation="vertical")
+    cbar.ax.tick_params(labelsize=tick_size)
+    cbar.set_label("Density (log scale)", fontsize=cbar_size)
+
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight")
+    plt.show()
+
+def safe_skew(vals, min_points=5, var_eps=1e-8, bias=False):
+    """
+    Skewness that treats near-constant data as zero skew instead of NaN.
+
+    stats.skew() computes m3 / m2**1.5; when the sample has (near) zero
+    variance — e.g. a larva has settled at the target and stopped moving
+    for that bin — this is a 0/0 division that returns NaN even though
+    there's nothing wrong with the data. A constant sample has, by
+    definition, no asymmetry to report, so we return 0.0 explicitly
+    rather than letting NaN propagate into downstream aggregates.
+    """
+    import scipy.stats as stats
+    vals = np.asarray(vals, dtype=float)
+    vals = vals[~np.isnan(vals)]
+    n = len(vals)
+    if n < min_points:
+        return np.nan, n, False  # genuinely insufficient data — this SHOULD stay NaN
+    std = vals.std(ddof=0)
+    is_constant = std < var_eps
+    if is_constant:
+        return 0.0, n, True
+    return stats.skew(vals, bias=bias), n, False
+
+
+def compute_bin_skewness_comparison(
+    df,
+    condition_a,
+    condition_b,
+    axis_col,
+    bin_size=100,
+    frame_col='Frame',
+    trial_col='Trial',
+    condition_col='Condition',
+    min_points_per_trial=5,
+    var_eps=1e-8,
+    n_boot=2000,
+    random_state=0
+):
+    import scipy.stats as stats
+    rng = np.random.default_rng(random_state)
+    df = df.copy()
+    df['Bin'] = (df[frame_col] // bin_size) * bin_size
+
+    def safe_skew(vals, min_points=5, var_eps=1e-8, bias=False):
+        """
+        Skewness that treats near-constant data as zero skew instead of NaN.
+
+        stats.skew() computes m3 / m2**1.5; when the sample has (near) zero
+        variance — e.g. a larva has settled at the target and stopped moving
+        for that bin — this is a 0/0 division that returns NaN even though
+        there's nothing wrong with the data. A constant sample has, by
+        definition, no asymmetry to report, so we return 0.0 explicitly
+        rather than letting NaN propagate into downstream aggregates.
+        """
+        import scipy.stats as stats
+        vals = np.asarray(vals, dtype=float)
+        vals = vals[~np.isnan(vals)]
+        n = len(vals)
+        if n < min_points:
+            return np.nan, n, False  # genuinely insufficient data — this SHOULD stay NaN
+        std = vals.std(ddof=0)
+        is_constant = std < var_eps
+        if is_constant:
+            return 0.0, n, True
+        return stats.skew(vals, bias=bias), n, False
+
+    def trial_skews(cond):
+        sub = df[df[condition_col] == cond]
+        rows = []
+        for (b, trial), g in sub.groupby(['Bin', trial_col]):
+            vals = g[axis_col].dropna().values
+            skew_val, n, is_const = safe_skew(vals, min_points=min_points_per_trial, var_eps=var_eps)
+            if np.isnan(skew_val):
+                continue  # only dropped for genuinely too-few points, not for zero variance
+            rows.append({'Bin': b, trial_col: trial, 'Skew': skew_val,
+                         'N': n, 'IsConstant': is_const})
+        return pd.DataFrame(rows)
+
+    skew_a = trial_skews(condition_a)
+    skew_b = trial_skews(condition_b)
+
+    def bootstrap_ci(vals, ci=95):
+        vals = vals[~np.isnan(vals)]
+        if len(vals) == 0:
+            return np.nan, np.nan, np.nan
+        boots = rng.choice(vals, size=(n_boot, len(vals)), replace=True).mean(axis=1)
+        lo, hi = np.nanpercentile(boots, [(100 - ci) / 2, 100 - (100 - ci) / 2])
+        return float(np.nanmean(vals)), float(lo), float(hi)
+
+    def cliffs_delta(x, y):
+        x, y = np.asarray(x), np.asarray(y)
+        gt = (x[:, None] > y[None, :]).sum()
+        lt = (x[:, None] < y[None, :]).sum()
+        return (gt - lt) / (len(x) * len(y))
+
+    results = []
+    all_bins = sorted(set(skew_a['Bin']).union(skew_b['Bin']))
+    for b in all_bins:
+        vals_a = skew_a.loc[skew_a['Bin'] == b, 'Skew'].values
+        vals_b = skew_b.loc[skew_b['Bin'] == b, 'Skew'].values
+        n_const_a = skew_a.loc[skew_a['Bin'] == b, 'IsConstant'].sum()
+        n_const_b = skew_b.loc[skew_b['Bin'] == b, 'IsConstant'].sum()
+
+        mean_a, lo_a, hi_a = bootstrap_ci(vals_a)
+        mean_b, lo_b, hi_b = bootstrap_ci(vals_b)
+
+        if len(vals_a) >= 2 and len(vals_b) >= 2:
+            u_stat, p_val = stats.mannwhitneyu(vals_a, vals_b, alternative='two-sided')
+            delta = cliffs_delta(vals_a, vals_b)
+        else:
+            u_stat, p_val, delta = np.nan, np.nan, np.nan
+
+        results.append({
+            'Bin': b, 'n_trials_a': len(vals_a), 'n_trials_b': len(vals_b),
+            'n_constant_a': int(n_const_a), 'n_constant_b': int(n_const_b),
+            'skew_a': mean_a, 'skew_a_lo': lo_a, 'skew_a_hi': hi_a,
+            'skew_b': mean_b, 'skew_b_lo': lo_b, 'skew_b_hi': hi_b,
+            'u_stat': u_stat, 'p_value': p_val, 'cliffs_delta': delta,
+        })
+
+    return pd.DataFrame(results)
+
+
+def plot_marginal_comparison_ridgeline(
+    df,
+    condition_a,
+    condition_b,
+    axis_col='X',
+    bin_size=100,
+    frame_col='Frame',
+    trial_col='Trial',
+    condition_col='Condition',
+    target_value=None,        # e.g. 15 for X — draws a reference line
+    color_a='#d95f02',
+    color_b='#1b9e77',
+    ridge_overlap=0.6,
+    n_boot=2000,
+    stats_df=None,            # pass a precomputed table to avoid recomputing
+    title=None,
+):
+    """
+    Ridgeline comparison of an axis marginal between two conditions, one
+    ridge row per frame bin. Both conditions' full KDEs are drawn — nothing
+    is reduced to an average — with trial-level skewness, Cliff's delta, and
+    a Mann-Whitney significance marker annotated per row.
+    """
+    if stats_df is None:
+        stats_df = compute_bin_skewness_comparison(
+            df, condition_a, condition_b, axis_col=axis_col,
+            bin_size=bin_size, frame_col=frame_col, trial_col=trial_col,
+            condition_col=condition_col, n_boot=n_boot,
+        )
+
+    import scipy.stats as stats
+
+    df = df.copy()
+    df['Bin'] = (df[frame_col] // bin_size) * bin_size
+    bins = sorted(stats_df['Bin'].unique())
+
+    xmin, xmax = df[axis_col].min(), df[axis_col].max()
+    grid = np.linspace(xmin, xmax, 400)
+
+    fig, ax = plt.subplots(figsize=(10, 1.1 * len(bins) + 1))
+
+    for row_idx, b in enumerate(bins):
+        y0 = row_idx * ridge_overlap
+        for cond, color in [(condition_a, color_a), (condition_b, color_b)]:
+            vals = df[(df['Bin'] == b) & (df[condition_col] == cond)][axis_col].dropna().values
+            if len(vals) < 5:
+                continue
+            kde = stats.gaussian_kde(vals)
+            density = kde(grid)
+            density = density / density.max() * ridge_overlap * 0.9
+            ax.fill_between(grid, y0, y0 + density, color=color, alpha=0.45, lw=0)
+            ax.plot(grid, y0 + density, color=color, lw=1.2)
+
+        row = stats_df[stats_df['Bin'] == b].iloc[0]
+        p = row['p_value']
+        star = ('***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else 'ns') \
+            if not np.isnan(p) else 'n/a'
+        annot = (f"skew {row['skew_a']:.2f} vs {row['skew_b']:.2f}  "
+                 f"(δ={row['cliffs_delta']:.2f}, {star})")
+        ax.text(xmax, y0 + ridge_overlap * 0.5, annot, va='center', ha='left', fontsize=9)
+        ax.text(xmin, y0 + ridge_overlap * 0.5, f"{int(b)}", va='center', ha='right',
+                fontsize=10, fontweight='bold')
+
+    if target_value is not None:
+        ax.axvline(target_value, color='gray', linestyle='--', lw=1, zorder=0)
+
+    ax.set_yticks([])
+    ax.set_xlabel(f"{axis_col}-coordinate (cm)")
+    ax.set_xlim(xmin, xmax + (xmax - xmin) * 0.45)  # room for annotations
+    ax.spines[['top', 'right', 'left']].set_visible(False)
+
+    handles = [
+        plt.Line2D([0], [0], color=color_a, lw=6, alpha=0.6, label=condition_a),
+        plt.Line2D([0], [0], color=color_b, lw=6, alpha=0.6, label=condition_b),
+    ]
+    ax.legend(handles=handles, loc='upper right', frameon=False)
+    fig.suptitle(title or f"{axis_col}-marginal, {condition_a} vs {condition_b} (bin = frame)")
+    plt.tight_layout()
+    plt.show()
+
+    return stats_df
+
+
+def plot_skew_trajectory(stats_df, axis_col='X', condition_a='A', condition_b='B',
+                          color_a='#d95f02', color_b='#1b9e77'):
+    """
+    Compact companion plot: skewness (± bootstrap CI) vs frame bin for both
+    conditions on one axis — good for seeing whether directedness (skew
+    toward the target) builds up over time, rather than reading it bin by
+    bin off the ridgeline.
+    """
+
+    import scipy.stats as stats
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for label, color, lo_col, hi_col, mean_col in [
+        (condition_a, color_a, 'skew_a_lo', 'skew_a_hi', 'skew_a'),
+        (condition_b, color_b, 'skew_b_lo', 'skew_b_hi', 'skew_b'),
+    ]:
+        ax.plot(stats_df['Bin'], stats_df[mean_col], color=color, marker='o', label=label)
+        ax.fill_between(stats_df['Bin'], stats_df[lo_col], stats_df[hi_col],
+                         color=color, alpha=0.2)
+
+    sig = stats_df[stats_df['p_value'] < 0.05]
+    if not sig.empty:
+        ax.scatter(sig['Bin'], [ax.get_ylim()[1] * 0.95] * len(sig),
+                   marker='*', color='black', s=60, label='p < 0.05')
+
+    ax.axhline(0, color='gray', linestyle='--', lw=1)
+    ax.set_xlabel('Frame bin')
+    ax.set_ylabel(f'{axis_col} skewness (mean over trials ± 95% CI)')
+    ax.set_title(f'{axis_col} skewness over time: {condition_a} vs {condition_b}')
+    ax.legend(frameon=False)
+    plt.tight_layout()
+    plt.show()
+
+    import numpy as np
+import pandas as pd
+import scipy.stats as stats
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def compute_bin_distance_comparison(
+    df,
+    condition_a,
+    condition_b,
+    target_x=14,
+    target_y=2,
+    distance_type='euclidean',   # 'euclidean', 'x' (|X - target_x|), or 'y' (|Y - target_y|)
+    stat='median',               # which per-trial summary drives the significance test: 'mean' or 'median'
+    bin_size=100,
+    frame_col='Frame',
+    x_col='X',
+    y_col='Y',
+    trial_col='Trial',
+    condition_col='Condition',
+    min_points_per_trial=5,
+    n_boot=2000,
+    random_state=0
+):
+    """
+    Per frame bin, compares distance-from-target between two conditions,
+    using TRIAL as the unit of replication (never pooled raw frames, for
+    the same autocorrelation reason as the skew comparison).
+
+    Returns one row per bin with:
+        mean_dist_a/b, median_dist_a/b   : trial-level summaries (+ bootstrap CI on `stat`)
+        u_stat, p_value                  : Mann-Whitney U on trial-level `stat` values
+        cliffs_delta                     : effect size, range [-1, 1]
+    """
+    rng = np.random.default_rng(random_state)
+    df = df.copy()
+    df['Bin'] = (df[frame_col] // bin_size) * bin_size
+
+    if distance_type == 'euclidean':
+        df['_dist'] = np.sqrt((df[x_col] - target_x) ** 2 + (df[y_col] - target_y) ** 2)
+    elif distance_type == 'x':
+        df['_dist'] = np.abs(df[x_col] - target_x)
+    elif distance_type == 'y':
+        df['_dist'] = np.abs(df[y_col] - target_y)
+    else:
+        raise ValueError("distance_type must be 'euclidean', 'x', or 'y'")
+
+    def trial_distances(cond):
+        sub = df[df[condition_col] == cond]
+        rows = []
+        for (b, trial), g in sub.groupby(['Bin', trial_col]):
+            vals = g['_dist'].dropna().values
+            if len(vals) < min_points_per_trial:
+                continue
+            rows.append({
+                'Bin': b, trial_col: trial,
+                'MeanDist': np.mean(vals), 'MedianDist': np.median(vals), 'N': len(vals)
+            })
+        return pd.DataFrame(rows)
+
+    dist_a = trial_distances(condition_a)
+    dist_b = trial_distances(condition_b)
+    stat_col = 'MeanDist' if stat == 'mean' else 'MedianDist'
+
+    def bootstrap_ci(vals, agg_fn, ci=95):
+        vals = vals[~np.isnan(vals)]
+        if len(vals) == 0:
+            return np.nan, np.nan, np.nan
+        boots = np.array([
+            agg_fn(rng.choice(vals, size=len(vals), replace=True)) for _ in range(n_boot)
+        ])
+        lo, hi = np.percentile(boots, [(100 - ci) / 2, 100 - (100 - ci) / 2])
+        return float(agg_fn(vals)), float(lo), float(hi)
+
+    def cliffs_delta(x, y):
+        x, y = np.asarray(x), np.asarray(y)
+        gt = (x[:, None] > y[None, :]).sum()
+        lt = (x[:, None] < y[None, :]).sum()
+        return (gt - lt) / (len(x) * len(y))
+
+    results = []
+    all_bins = sorted(set(dist_a['Bin']).union(dist_b['Bin']))
+    for b in all_bins:
+        rows_a = dist_a[dist_a['Bin'] == b]
+        rows_b = dist_b[dist_b['Bin'] == b]
+
+        mean_a, mean_lo_a, mean_hi_a = bootstrap_ci(rows_a['MeanDist'].values, np.mean)
+        mean_b, mean_lo_b, mean_hi_b = bootstrap_ci(rows_b['MeanDist'].values, np.mean)
+        med_a, med_lo_a, med_hi_a = bootstrap_ci(rows_a['MedianDist'].values, np.median)
+        med_b, med_lo_b, med_hi_b = bootstrap_ci(rows_b['MedianDist'].values, np.median)
+
+        vals_a_stat = rows_a[stat_col].values
+        vals_b_stat = rows_b[stat_col].values
+        if len(vals_a_stat) >= 2 and len(vals_b_stat) >= 2:
+            u_stat, p_val = stats.mannwhitneyu(vals_a_stat, vals_b_stat, alternative='two-sided')
+            delta = cliffs_delta(vals_a_stat, vals_b_stat)
+        else:
+            u_stat, p_val, delta = np.nan, np.nan, np.nan
+
+        results.append({
+            'Bin': b, 'n_trials_a': len(rows_a), 'n_trials_b': len(rows_b),
+            'mean_dist_a': mean_a, 'mean_dist_a_lo': mean_lo_a, 'mean_dist_a_hi': mean_hi_a,
+            'mean_dist_b': mean_b, 'mean_dist_b_lo': mean_lo_b, 'mean_dist_b_hi': mean_hi_b,
+            'median_dist_a': med_a, 'median_dist_a_lo': med_lo_a, 'median_dist_a_hi': med_hi_a,
+            'median_dist_b': med_b, 'median_dist_b_lo': med_lo_b, 'median_dist_b_hi': med_hi_b,
+            'u_stat': u_stat, 'p_value': p_val, 'cliffs_delta': delta,
+        })
+
+    trial_level = pd.concat([
+        dist_a.assign(**{condition_col: condition_a}),
+        dist_b.assign(**{condition_col: condition_b}),
+    ], ignore_index=True)
+
+    return pd.DataFrame(results), trial_level
+
+
+def plot_distance_trajectory(
+    stats_df,
+    condition_a='A', condition_b='B',
+    stat='median',                 # 'mean' or 'median' — which summary line to draw
+    color_a='#d95f02', color_b='#1b9e77',
+    title=None,
+):
+    """
+    Distance-from-target (± bootstrap CI) vs frame bin for both conditions,
+    with Mann-Whitney significance markers per bin. Analogous to
+    plot_skew_trajectory but for distance.
+    """
+    prefix = 'mean_dist' if stat == 'mean' else 'median_dist'
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for label, color in [(condition_a, color_a), (condition_b, color_b)]:
+        suffix = 'a' if label == condition_a else 'b'
+        ax.plot(stats_df['Bin'], stats_df[f'{prefix}_{suffix}'],
+                color=color, marker='o', label=label)
+        ax.fill_between(stats_df['Bin'], stats_df[f'{prefix}_{suffix}_lo'],
+                         stats_df[f'{prefix}_{suffix}_hi'], color=color, alpha=0.2)
+
+    sig = stats_df[stats_df['p_value'] < 0.05]
+    if not sig.empty:
+        y_marker = ax.get_ylim()[1] * 0.97
+        ax.scatter(sig['Bin'], [y_marker] * len(sig),
+                   marker='*', color='black', s=70, label='p < 0.05', zorder=5)
+
+    ax.set_xlabel('Frame bin')
+    ax.set_ylabel(f'{stat.capitalize()} distance from target (cm, ± 95% CI)')
+    ax.set_title(title or f'Distance from target over time: {condition_a} vs {condition_b}')
+    ax.legend(frameon=False)
+    ax.spines[['top', 'right']].set_visible(False)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_distance_boxplots_over_time(
+    trial_level_df,
+    condition_a='A', condition_b='B',
+    stat='median',                  # which per-trial column to plot: 'mean' or 'median'
+    condition_col='Condition',
+    color_a='#d95f02', color_b='#1b9e77',
+    title=None,
+):
+    """
+    Per-trial distance-from-target as boxplot + stripplot, grouped by frame
+    bin and condition. This is the dimensionality-preserving companion to
+    plot_distance_trajectory: rather than collapsing to a single line ± CI,
+    every trial's summary value is a visible point, so you can see spread,
+    outliers, and bimodality (e.g. some larvae reaching target, others not)
+    that a mean/CI band would hide.
+    """
+    value_col = 'MeanDist' if stat == 'mean' else 'MedianDist'
+    palette = {condition_a: color_a, condition_b: color_b}
+
+    fig, ax = plt.subplots(figsize=(max(10, trial_level_df['Bin'].nunique() * 1.2), 6))
+    sns.boxplot(
+        data=trial_level_df, x='Bin', y=value_col, hue=condition_col,
+        palette=palette, showfliers=False, ax=ax
+    )
+    sns.stripplot(
+        data=trial_level_df, x='Bin', y=value_col, hue=condition_col,
+        palette=palette, dodge=True, jitter=True, size=4, alpha=0.6,
+        edgecolor='black', linewidth=0.3, ax=ax, legend=False
+    )
+
+    ax.set_xlabel('Frame bin')
+    ax.set_ylabel(f'Per-trial {stat} distance from target (cm)')
+    ax.set_title(title or f'Per-trial distance distributions: {condition_a} vs {condition_b}')
+    ax.tick_params(axis='x', rotation=45)
+    ax.spines[['top', 'right']].set_visible(False)
+    plt.tight_layout()
+    plt.show()
