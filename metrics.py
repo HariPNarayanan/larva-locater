@@ -890,4 +890,4 @@ def current_occupancy_directional(
         records.append(binned)
  
     return pd.concat(records, ignore_index=True)
- 
+

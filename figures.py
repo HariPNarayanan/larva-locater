@@ -1377,26 +1377,6 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.colors import LogNorm
 
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.colors import LogNorm
-
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.colors import LogNorm
-
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.colors import LogNorm
-
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-from matplotlib.colors import LogNorm
-
 def trajectory_heatmaps_with_marginals(
     df,
     condition,
@@ -1983,3 +1963,221 @@ def plot_distance_boxplots_over_time(
     ax.spines[['top', 'right']].set_visible(False)
     plt.tight_layout()
     plt.show()
+
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def compute_individual_odour_pi(
+    df,
+    condition,
+    bin_size=100,
+    zone_width=10.0,
+    arena_height=30.0,
+    frame_col='Frame',
+    individual_col='Individual',
+    y_col='Y',
+    condition_col='Condition',
+    collective_col='Collective',
+    collective_filter=None,   # e.g. 'Single' to restrict the pool, 'Group' for the real condition
+):
+    """
+    Per-individual, per-bin Preference Index toward the odour target only.
+
+    near = Y <= zone_width          (close to the odour, bottom edge)
+    far  = Y >= arena_height - zone_width   (far strip, top edge)
+    PI = (n_near - n_far) / (n_near + n_far)
+
+    Purely temporal: each individual's PI comes from their own frames,
+    with no reference to other individuals.
+    """
+    sub = df[df[condition_col] == condition].copy()
+    if collective_filter is not None:
+        sub = sub[sub[collective_col] == collective_filter]
+    if sub.empty:
+        raise ValueError(f"No rows found for condition '{condition}'"
+                          f"{' / Collective=' + collective_filter if collective_filter else ''}.")
+
+    sub["FrameBin"] = (sub[frame_col] // bin_size) * bin_size
+
+    records = []
+    for ind, ind_df in sub.groupby(individual_col):
+        ind_df = ind_df.sort_values(frame_col)
+        for bin_id, bin_df in ind_df.groupby("FrameBin"):
+            n_near = (bin_df[y_col] <= zone_width).sum()
+            n_far = (bin_df[y_col] >= (arena_height - zone_width)).sum()
+            denom = n_near + n_far
+            pi = np.nan if denom == 0 else (n_near - n_far) / denom
+            records.append({
+                individual_col: ind, "FrameBin": bin_id, "PreferenceIndex": pi,
+            })
+
+    return pd.DataFrame(records)
+
+
+def bootstrap_pseudogroup_odour_pi(
+    ind_pi_df,
+    n_virtual_individuals=15,
+    n_boot=500,
+    individual_col='Individual',
+    random_state=0,
+):
+    """
+    Bootstraps over WHICH individuals get averaged together per FrameBin,
+    reusing each individual's already-computed temporal PI value -- same
+    logic as before, just without the Target grouping.
+    """
+    rng = np.random.default_rng(random_state)
+    unique_inds = ind_pi_df[individual_col].unique()
+    if len(unique_inds) == 0:
+        raise ValueError("No individuals found in ind_pi_df.")
+
+    records = []
+    for b in range(n_boot):
+        drawn = rng.choice(unique_inds, size=n_virtual_individuals, replace=True)
+
+        pieces = []
+        for virtual_id, real_ind in enumerate(drawn):
+            piece = ind_pi_df[ind_pi_df[individual_col] == real_ind].copy()
+            piece['VirtualIndividual'] = virtual_id
+            pieces.append(piece)
+        cohort = pd.concat(pieces, ignore_index=True)
+
+        bin_means = cohort.groupby("FrameBin")["PreferenceIndex"].mean().reset_index()
+        bin_means['BootstrapID'] = b
+        records.append(bin_means)
+
+    return pd.concat(records, ignore_index=True)
+
+
+def summarize_pseudogroup_vs_real_odour(pseudogroup_df, real_pi_df, ci=95):
+    """
+    Collapses bootstrap draws into mean ± CI per FrameBin, next to the
+    real Group PI's mean ± SEM across its actual individuals.
+    """
+    alpha = 100 - ci
+    lo_q, hi_q = alpha / 2, 100 - alpha / 2
+
+    pseudo_summary = (
+        pseudogroup_df.groupby("FrameBin")["PreferenceIndex"]
+        .agg(Mean="mean",
+             CI_lo=lambda x: np.nanpercentile(x, lo_q),
+             CI_hi=lambda x: np.nanpercentile(x, hi_q))
+        .reset_index()
+    )
+    pseudo_summary['Source'] = 'Pseudo-Group (bootstrapped Singles)'
+
+    real_summary = (
+        real_pi_df.groupby("FrameBin")["PreferenceIndex"]
+        .agg(Mean="mean", SEM=lambda x: x.sem())
+        .reset_index()
+    )
+    real_summary['CI_lo'] = real_summary['Mean'] - real_summary['SEM']
+    real_summary['CI_hi'] = real_summary['Mean'] + real_summary['SEM']
+    real_summary['Source'] = 'Real Group'
+
+    cols = ["FrameBin", "Mean", "CI_lo", "CI_hi", "Source"]
+    return pd.concat([pseudo_summary[cols], real_summary[cols]], ignore_index=True)
+
+
+def plot_pseudogroup_vs_real_odour(
+    comparison_df,
+    condition_label="Fed",
+    real_color="#c1440e",
+    pseudo_color="#555555",
+    save_path=None,
+):
+    """
+    Single-panel comparison of real Group PI vs bootstrapped pseudo-group
+    PI toward the odour target only.
+    """
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    style_map = {
+        "Real Group": {"color": real_color, "linestyle": "-", "linewidth": 2.2, "zorder": 3},
+        "Pseudo-Group (bootstrapped Singles)": {
+            "color": pseudo_color, "linestyle": "--", "linewidth": 1.6, "zorder": 2
+        },
+    }
+
+    for source, s in style_map.items():
+        sub = comparison_df[comparison_df["Source"] == source].sort_values("FrameBin")
+        if sub.empty:
+            continue
+        ax.plot(
+            sub["FrameBin"], sub["Mean"],
+            label=source, color=s["color"],
+            linestyle=s["linestyle"], linewidth=s["linewidth"], zorder=s["zorder"],
+        )
+        ax.fill_between(
+            sub["FrameBin"], sub["CI_lo"], sub["CI_hi"],
+            color=s["color"], alpha=0.18, zorder=s["zorder"] - 1,
+        )
+
+    ax.axhline(0, linestyle=":", color="black", linewidth=1)
+    ax.set_title(f"Odour Preference Index — Real Group vs Pseudo-Group ({condition_label})")
+    ax.set_xlabel("Frame Bin")
+    ax.set_ylabel("Preference Index (near − far)")
+    ax.legend(frameon=False, fontsize=9)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight")
+    plt.show()
+
+def run_odour_pi_comparison(
+    df,
+    n_boot=500,
+    bin_size=100,
+    zone_width=10.0,
+    arena_height=30.0,
+    random_state=0,
+    condition_col='Condition',
+    collective_col='Collective',
+    individual_col='Individual',
+    plot=True,
+):
+    """
+    Runs the full Single-vs-Group odour PI comparison on a dataframe that
+    contains exactly one Single condition and one Group condition. Infers
+    both the condition labels and the real group size from the data --
+    nothing hardcoded.
+    """
+    single_conds = df.loc[df[collective_col] == 'Single', condition_col].unique()
+    group_conds  = df.loc[df[collective_col] == 'Group',  condition_col].unique()
+
+    if len(single_conds) != 1 or len(group_conds) != 1:
+        raise ValueError(
+            f"Expected exactly one Single and one Group condition, got "
+            f"Single={list(single_conds)}, Group={list(group_conds)}."
+        )
+    single_cond, group_cond = single_conds[0], group_conds[0]
+
+    # Match the pseudo-group size to the REAL group's actual individual
+    # count, rather than hardcoding 15 -- keeps the comparison fair even
+    # if group size varies across datasets.
+    n_virtual_individuals = df.loc[
+        (df[condition_col] == group_cond) & (df[collective_col] == 'Group'),
+        individual_col
+    ].nunique()
+
+    ind_pi_single = compute_individual_odour_pi(
+        df, condition=single_cond, collective_filter='Single',
+        bin_size=bin_size, zone_width=zone_width, arena_height=arena_height,
+    )
+    real_pi_group = compute_individual_odour_pi(
+        df, condition=group_cond, collective_filter='Group',
+        bin_size=bin_size, zone_width=zone_width, arena_height=arena_height,
+    )
+    pseudogroup_df = bootstrap_pseudogroup_odour_pi(
+        ind_pi_single, n_virtual_individuals=n_virtual_individuals,
+        n_boot=n_boot, random_state=random_state,
+    )
+    comparison_df = summarize_pseudogroup_vs_real_odour(pseudogroup_df, real_pi_group)
+
+    if plot:
+        plot_pseudogroup_vs_real_odour(comparison_df, condition_label=group_cond)
+
+    return comparison_df
